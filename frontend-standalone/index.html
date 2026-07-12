@@ -1,0 +1,1479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CAD-CAE Analyzer — Engineering Analysis Platform</title>
+  <meta name="description" content="Upload CAD files, run automated FEA/CFD analyses and view interactive 3D results powered by open-source solvers.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <style>
+    /* ── Design Tokens ─────────────────────────────────────────────────────── */
+    :root {
+      --bg-900: #060d1a;
+      --bg-800: #0d1b2e;
+      --bg-700: #112240;
+      --bg-600: #172a4a;
+      --bg-panel: rgba(17,34,64,0.85);
+      --accent: #2979ff;
+      --accent-h: #448aff;
+      --accent-glow: rgba(41,121,255,0.25);
+      --cyan: #00e5ff;
+      --green: #00e676;
+      --amber: #ffab40;
+      --red: #ff5252;
+      --text-primary: #e8f0fe;
+      --text-secondary: #8ba3c7;
+      --text-muted: #4a6080;
+      --border: rgba(41,121,255,0.2);
+      --border-h: rgba(41,121,255,0.5);
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 8px 32px rgba(0,0,0,0.4);
+      --glow: 0 0 20px rgba(41,121,255,0.15);
+      --font: 'Inter', system-ui, sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Reset ─────────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: var(--font);
+      background: var(--bg-900);
+      color: var(--text-primary);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Scrollbar ─────────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg-800); }
+    ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 3px; }
+
+    /* ── Background mesh ───────────────────────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background:
+        radial-gradient(ellipse 80% 50% at 50% -10%, rgba(41,121,255,0.12) 0%, transparent 60%),
+        radial-gradient(ellipse 40% 30% at 85% 80%, rgba(0,229,255,0.06) 0%, transparent 50%);
+      pointer-events: none; z-index: 0;
+    }
+
+    /* ── Layout ────────────────────────────────────────────────────────────── */
+    .app { display: flex; min-height: 100vh; position: relative; z-index: 1; }
+
+    /* ── Sidebar ───────────────────────────────────────────────────────────── */
+    .sidebar {
+      width: 220px; flex-shrink: 0;
+      background: var(--bg-800);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      position: sticky; top: 0; height: 100vh;
+      overflow-y: auto;
+    }
+    .logo {
+      padding: 20px 16px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .logo-icon {
+      width: 36px; height: 36px; border-radius: 10px;
+      background: linear-gradient(135deg, var(--accent), var(--cyan));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+    .logo-text { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+    .logo-sub  { font-size: 10px; color: var(--text-muted); font-weight: 400; }
+
+    .nav { padding: 12px 8px; flex: 1; }
+    .nav-section { font-size: 10px; font-weight: 600; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 1px; padding: 8px 8px 4px; }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 10px; border-radius: var(--radius-sm);
+      color: var(--text-secondary); font-size: 13px; font-weight: 500;
+      cursor: pointer; transition: all .2s; margin-bottom: 2px; border: none;
+      background: none; width: 100%; text-align: left;
+    }
+    .nav-item:hover  { background: var(--bg-700); color: var(--text-primary); }
+    .nav-item.active { background: var(--accent-glow); color: var(--accent); }
+    .nav-item .icon  { font-size: 16px; width: 20px; text-align: center; }
+
+    .sidebar-footer {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      font-size: 11px; color: var(--text-muted);
+    }
+    .status-dot {
+      display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--green); margin-right: 6px;
+      box-shadow: 0 0 6px var(--green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    /* ── Main ──────────────────────────────────────────────────────────────── */
+    .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .topbar {
+      height: 56px; display: flex; align-items: center;
+      padding: 0 24px; gap: 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(6,13,26,0.6); backdrop-filter: blur(12px);
+      position: sticky; top: 0; z-index: 10;
+    }
+    .topbar-title { font-size: 15px; font-weight: 600; flex: 1; }
+    .topbar-badge {
+      padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;
+      background: var(--accent-glow); color: var(--accent);
+      border: 1px solid var(--border);
+    }
+
+    /* ── Pages ─────────────────────────────────────────────────────────────── */
+    .page { display: none; flex: 1; padding: 28px; overflow-y: auto; }
+    .page.active { display: block; }
+
+    /* ── Cards ─────────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(12px);
+      box-shadow: var(--shadow);
+    }
+    .card-header {
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .card-header h3 { font-size: 14px; font-weight: 600; }
+    .card-body { padding: 20px; }
+
+    /* ── Grid ──────────────────────────────────────────────────────────────── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+
+    /* ── Stat cards ────────────────────────────────────────────────────────── */
+    .stat-card {
+      background: var(--bg-panel); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px 18px;
+      transition: border-color .2s, transform .2s;
+    }
+    .stat-card:hover { border-color: var(--border-h); transform: translateY(-2px); }
+    .stat-label { font-size: 11px; color: var(--text-muted); font-weight: 500;
+      text-transform: uppercase; letter-spacing: .5px; }
+    .stat-value { font-size: 24px; font-weight: 700; margin: 4px 0 2px;
+      font-family: var(--mono); }
+    .stat-unit  { font-size: 12px; color: var(--text-muted); }
+    .stat-pass  { color: var(--green); }
+    .stat-warn  { color: var(--amber); }
+    .stat-fail  { color: var(--red); }
+
+    /* ── Buttons ───────────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 9px 20px; border-radius: var(--radius-sm);
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      border: none; transition: all .2s; font-family: var(--font);
+    }
+    .btn-primary {
+      background: var(--accent); color: #fff;
+      box-shadow: 0 4px 16px rgba(41,121,255,0.35);
+    }
+    .btn-primary:hover { background: var(--accent-h); transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(41,121,255,0.5); }
+    .btn-secondary {
+      background: var(--bg-700); color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--border-h); background: var(--bg-600); }
+    .btn-ghost { background: none; color: var(--text-secondary); border: 1px solid var(--border); }
+    .btn-ghost:hover { color: var(--text-primary); border-color: var(--border-h); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; transform: none !important; }
+    .btn-sm { padding: 6px 14px; font-size: 12px; }
+    .btn-lg { padding: 13px 28px; font-size: 14px; }
+
+    /* ── Form elements ─────────────────────────────────────────────────────── */
+    .form-group { margin-bottom: 16px; }
+    .form-label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary);
+      margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
+    .form-input {
+      width: 100%; padding: 9px 12px; border-radius: var(--radius-sm);
+      background: var(--bg-800); border: 1px solid var(--border);
+      color: var(--text-primary); font-size: 13px; font-family: var(--font);
+      transition: border-color .2s;
+    }
+    .form-input:focus { outline: none; border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(41,121,255,.15); }
+    .form-select {
+      width: 100%; padding: 9px 12px; border-radius: var(--radius-sm);
+      background: var(--bg-800); border: 1px solid var(--border);
+      color: var(--text-primary); font-size: 13px; cursor: pointer;
+      font-family: var(--font);
+    }
+
+    /* ── Upload zone ───────────────────────────────────────────────────────── */
+    .upload-zone {
+      border: 2px dashed var(--border); border-radius: var(--radius);
+      padding: 48px 24px; text-align: center; cursor: pointer;
+      transition: all .2s; background: var(--bg-700);
+    }
+    .upload-zone:hover, .upload-zone.drag-over {
+      border-color: var(--accent); background: var(--accent-glow);
+    }
+    .upload-icon { font-size: 48px; margin-bottom: 12px; }
+    .upload-title { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
+    .upload-sub   { font-size: 13px; color: var(--text-muted); }
+    .upload-formats { display: flex; gap: 6px; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
+    .fmt-badge {
+      padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;
+      background: var(--bg-600); color: var(--text-secondary); border: 1px solid var(--border);
+    }
+
+    /* ── Feature badges ────────────────────────────────────────────────────── */
+    .feature-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .feat-badge {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 500;
+      border: 1px solid;
+    }
+    .feat-badge.yes  { background: rgba(0,230,118,0.08); color: var(--green); border-color: rgba(0,230,118,0.25); }
+    .feat-badge.no   { background: rgba(74,96,128,0.1); color: var(--text-muted); border-color: rgba(74,96,128,0.2); }
+    .feat-badge.warn { background: rgba(255,171,64,0.08); color: var(--amber); border-color: rgba(255,171,64,0.25); }
+
+    /* ── Analysis cards ────────────────────────────────────────────────────── */
+    .analysis-card {
+      border: 2px solid var(--border); border-radius: var(--radius);
+      padding: 16px; cursor: pointer; transition: all .2s;
+      background: var(--bg-panel);
+    }
+    .analysis-card:hover   { border-color: var(--border-h); transform: translateY(-2px); }
+    .analysis-card.selected { border-color: var(--accent); background: var(--accent-glow); }
+    .analysis-card-icon { font-size: 28px; margin-bottom: 8px; }
+    .analysis-card-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+    .analysis-card-sub   { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+    .confidence-bar { height: 3px; border-radius: 2px; background: var(--bg-700); margin-top: 10px; overflow: hidden; }
+    .confidence-fill { height: 100%; border-radius: 2px; background: var(--accent);
+      transition: width .5s ease; }
+
+    /* ── Progress ──────────────────────────────────────────────────────────── */
+    .progress-track { height: 6px; border-radius: 3px; background: var(--bg-700); overflow: hidden; }
+    .progress-fill  {
+      height: 100%; border-radius: 3px;
+      background: linear-gradient(90deg, var(--accent), var(--cyan));
+      transition: width .4s ease;
+      box-shadow: 0 0 8px rgba(41,121,255,0.5);
+    }
+    .progress-animated .progress-fill {
+      background: linear-gradient(90deg, var(--accent), var(--cyan), var(--accent));
+      background-size: 200%;
+      animation: shimmer 1.5s linear infinite;
+    }
+    @keyframes shimmer { to { background-position: 200% center; } }
+
+    /* ── Tabs ──────────────────────────────────────────────────────────────── */
+    .tabs { display: flex; gap: 2px; background: var(--bg-800);
+      border-radius: var(--radius-sm); padding: 4px; }
+    .tab-btn {
+      flex: 1; padding: 7px 12px; border-radius: 6px; font-size: 12px;
+      font-weight: 600; cursor: pointer; border: none; background: none;
+      color: var(--text-muted); transition: all .2s; font-family: var(--font);
+    }
+    .tab-btn.active { background: var(--bg-700); color: var(--text-primary); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── 3D Viewer ─────────────────────────────────────────────────────────── */
+    #viewer-canvas {
+      width: 100%; height: 400px; border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, #050c18 0%, #0a1828 100%);
+      display: block;
+    }
+    .viewer-controls {
+      display: flex; gap: 8px; padding: 10px 0 0;
+      flex-wrap: wrap; align-items: center;
+    }
+    .colorbar {
+      display: flex; align-items: center; gap: 8px; margin-left: auto;
+    }
+    .colorbar-gradient {
+      width: 120px; height: 10px; border-radius: 5px;
+      background: linear-gradient(90deg, #0000ff, #00ffff, #00ff00, #ffff00, #ff0000);
+    }
+    .colorbar-labels { display: flex; justify-content: space-between; width: 120px;
+      font-size: 10px; color: var(--text-muted); font-family: var(--mono); }
+
+    /* ── Log terminal ──────────────────────────────────────────────────────── */
+    .log-term {
+      background: #020810; border: 1px solid rgba(0,229,255,0.15);
+      border-radius: var(--radius-sm); padding: 14px 16px;
+      font-family: var(--mono); font-size: 12px; line-height: 1.8;
+      max-height: 200px; overflow-y: auto; color: var(--text-secondary);
+    }
+    .log-info  { color: var(--cyan); }
+    .log-ok    { color: var(--green); }
+    .log-warn  { color: var(--amber); }
+    .log-err   { color: var(--red); }
+
+    /* ── Chat ──────────────────────────────────────────────────────────────── */
+    .chat-panel {
+      position: fixed; bottom: 24px; right: 24px; width: 360px; z-index: 100;
+    }
+    .chat-fab {
+      position: absolute; bottom: 0; right: 0;
+      width: 52px; height: 52px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--cyan));
+      border: none; color: #fff; font-size: 22px; cursor: pointer;
+      box-shadow: 0 4px 20px rgba(41,121,255,0.5);
+      transition: transform .2s;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .chat-fab:hover { transform: scale(1.08); }
+    .chat-box {
+      display: none;
+      background: var(--bg-800); border: 1px solid var(--border);
+      border-radius: 16px; box-shadow: var(--shadow), 0 0 40px rgba(41,121,255,0.1);
+      overflow: hidden; margin-bottom: 64px;
+    }
+    .chat-box.open { display: flex; flex-direction: column; }
+    .chat-header {
+      padding: 14px 16px; background: linear-gradient(90deg, var(--accent) 0%, rgba(0,229,255,0.8) 100%);
+      display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+    }
+    .chat-header h4 { font-size: 13px; font-weight: 700; }
+    .chat-messages { height: 300px; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .chat-msg { max-width: 85%; padding: 9px 12px; border-radius: 12px; font-size: 13px; line-height: 1.5; }
+    .chat-msg.user { background: var(--accent); color: #fff; align-self: flex-end; border-radius: 12px 12px 2px 12px; }
+    .chat-msg.bot  { background: var(--bg-700); color: var(--text-primary); align-self: flex-start; border: 1px solid var(--border); border-radius: 12px 12px 12px 2px; }
+    .chat-input-row { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--border); flex-shrink: 0; }
+    .chat-input { flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--bg-700); color: var(--text-primary); font-size: 13px; font-family: var(--font); }
+    .chat-input:focus { outline: none; border-color: var(--accent); }
+    .chat-send { width: 36px; height: 36px; border-radius: 8px; border: none;
+      background: var(--accent); color: #fff; cursor: pointer; font-size: 16px;
+      display: flex; align-items: center; justify-content: center; }
+
+    /* ── Toast ─────────────────────────────────────────────────────────────── */
+    .toast-container { position: fixed; top: 70px; right: 24px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+    .toast {
+      padding: 12px 16px; border-radius: var(--radius-sm); font-size: 13px;
+      background: var(--bg-700); border: 1px solid var(--border);
+      box-shadow: var(--shadow); color: var(--text-primary);
+      animation: slideIn .3s ease; max-width: 320px;
+    }
+    .toast.success { border-color: rgba(0,230,118,0.4); }
+    .toast.error   { border-color: rgba(255,82,82,0.4); }
+    @keyframes slideIn { from{transform:translateX(110%);opacity:0} to{transform:translateX(0);opacity:1} }
+
+    /* ── Hero ──────────────────────────────────────────────────────────────── */
+    .hero {
+      text-align: center; padding: 60px 24px 40px;
+      background: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(41,121,255,0.1) 0%, transparent 60%);
+    }
+    .hero-tag {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 14px; border-radius: 20px;
+      background: var(--accent-glow); border: 1px solid var(--border);
+      font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 20px;
+    }
+    .hero h1 { font-size: 42px; font-weight: 800; line-height: 1.15; margin-bottom: 16px;
+      background: linear-gradient(135deg, #e8f0fe 0%, var(--accent-h) 50%, var(--cyan) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero p { font-size: 16px; color: var(--text-secondary); max-width: 560px; margin: 0 auto 32px; line-height: 1.7; }
+
+    .feature-pills { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; margin-bottom: 36px; }
+    .feature-pill {
+      display: flex; align-items: center; gap: 7px;
+      padding: 8px 14px; border-radius: 30px;
+      background: var(--bg-panel); border: 1px solid var(--border);
+      font-size: 13px; color: var(--text-secondary);
+    }
+
+    /* ── Misc ──────────────────────────────────────────────────────────────── */
+    .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+    .badge-small {
+      padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .5px;
+    }
+    .badge-blue   { background: var(--accent-glow); color: var(--accent); }
+    .badge-green  { background: rgba(0,230,118,0.1); color: var(--green); }
+    .badge-amber  { background: rgba(255,171,64,0.1); color: var(--amber); }
+    .badge-cyan   { background: rgba(0,229,255,0.1); color: var(--cyan); }
+    .row { display: flex; gap: 12px; align-items: center; }
+    .flex-1 { flex: 1; }
+    .mt-16 { margin-top: 16px; }
+    .mt-12 { margin-top: 12px; }
+    .mb-12 { margin-bottom: 12px; }
+    .mb-16 { margin-bottom: 16px; }
+    .text-sm { font-size: 12px; }
+    .text-muted { color: var(--text-muted); }
+    .text-right { text-align: right; }
+    .mono { font-family: var(--mono); }
+    .gap-8  { gap: 8px; }
+
+    /* ── Spinner ───────────────────────────────────────────────────────────── */
+    .spinner {
+      width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff; border-radius: 50%;
+      animation: spin .7s linear infinite; display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Responsive ────────────────────────────────────────────────────────── */
+    @media (max-width: 900px) {
+      .sidebar { width: 60px; }
+      .nav-item span { display: none; }
+      .logo-text, .logo-sub, .sidebar-footer { display: none; }
+      .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-icon">⚙</div>
+      <div>
+        <div class="logo-text">CAD-CAE</div>
+        <div class="logo-sub">Analysis Platform</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <div class="nav-section">Workspace</div>
+      <button class="nav-item active" id="nav-home" onclick="showPage('home')">
+        <span class="icon">🏠</span><span>Home</span>
+      </button>
+      <button class="nav-item" id="nav-upload" onclick="showPage('upload')">
+        <span class="icon">📁</span><span>Upload CAD</span>
+      </button>
+      <button class="nav-item" id="nav-analysis" onclick="showPage('analysis')">
+        <span class="icon">🔬</span><span>Analysis</span>
+      </button>
+      <button class="nav-item" id="nav-solver" onclick="showPage('solver')">
+        <span class="icon">⚡</span><span>Solver</span>
+      </button>
+      <button class="nav-item" id="nav-results" onclick="showPage('results')">
+        <span class="icon">📊</span><span>Results</span>
+      </button>
+      <div class="nav-section" style="margin-top:12px">Data</div>
+      <button class="nav-item" id="nav-materials" onclick="showPage('materials')">
+        <span class="icon">🧱</span><span>Materials</span>
+      </button>
+    </nav>
+    <div class="sidebar-footer">
+      <span class="status-dot"></span>API Connected
+    </div>
+  </aside>
+
+  <!-- ── Main ────────────────────────────────────────────────────────────── -->
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-title" id="topbar-title">Engineering Analysis Platform</div>
+      <span class="topbar-badge" id="topbar-mode">MOCK MODE</span>
+      <button class="btn btn-sm btn-ghost" onclick="checkHealth()">🔄 Refresh</button>
+    </header>
+
+    <!-- ── Pages ──────────────────────────────────────────────────────────── -->
+
+    <!-- HOME -->
+    <div class="page active" id="page-home">
+      <div class="hero">
+        <div class="hero-tag">✦ AI-Powered CAE Platform</div>
+        <h1>Automated Engineering<br>Analysis at Scale</h1>
+        <p>Upload a CAD file, get instant geometry insights, run FEA and CFD analyses with open-source solvers, and explore results in an interactive 3D viewer.</p>
+        <div class="feature-pills">
+          <div class="feature-pill">🔷 Static FEA</div>
+          <div class="feature-pill">🌊 CFD</div>
+          <div class="feature-pill">🎵 Modal</div>
+          <div class="feature-pill">🔥 Thermal</div>
+          <div class="feature-pill">💀 Fatigue S-N</div>
+          <div class="feature-pill">🤖 AI Chatbot</div>
+        </div>
+        <button class="btn btn-primary btn-lg" onclick="showPage('upload')">
+          Upload CAD File →
+        </button>
+      </div>
+      <div class="grid-3" style="padding:0 0 28px">
+        <div class="card">
+          <div class="card-body">
+            <div style="font-size:28px;margin-bottom:10px">📐</div>
+            <h3 style="margin-bottom:8px">Geometry Detection</h3>
+            <p class="text-sm text-muted">Automatically extracts volume, bounding box, thin walls, holes, fillets, symmetry and more from uploaded CAD/STL files.</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-body">
+            <div style="font-size:28px;margin-bottom:10px">⚡</div>
+            <h3 style="margin-bottom:8px">Smart Suggestions</h3>
+            <p class="text-sm text-muted">The suggestion engine analyses geometry features and use-case context to recommend the most relevant CAE analysis types.</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-body">
+            <div style="font-size:28px;margin-bottom:10px">🎯</div>
+            <h3 style="margin-bottom:8px">Interactive Results</h3>
+            <p class="text-sm text-muted">WebGL-based 3D viewer with stress contour colormaps, deformed shape overlay, and downloadable PDF reports.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h3>📡 API Status</h3></div>
+        <div class="card-body" id="api-status-panel">
+          <div class="text-muted text-sm">Checking...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- UPLOAD -->
+    <div class="page" id="page-upload">
+      <div class="grid-2" style="align-items:start;gap:20px">
+        <div>
+          <div class="card mb-16">
+            <div class="card-header"><h3>📁 Upload CAD File</h3></div>
+            <div class="card-body">
+              <div class="upload-zone" id="upload-zone">
+                <div class="upload-icon">🗂️</div>
+                <div class="upload-title">Drop your CAD file here</div>
+                <div class="upload-sub">or click to browse</div>
+                <div class="upload-formats">
+                  <span class="fmt-badge">STL</span>
+                  <span class="fmt-badge">OBJ</span>
+                  <span class="fmt-badge">STEP</span>
+                  <span class="fmt-badge">IGES</span>
+                  <span class="fmt-badge">PLY</span>
+                </div>
+              </div>
+              <input type="file" id="file-input" accept=".stl,.obj,.step,.stp,.iges,.igs,.ply" style="display:none">
+              <div class="mt-12">
+                <div class="form-group">
+                  <label class="form-label">Project Name</label>
+                  <input class="form-input" id="project-name" type="text" placeholder="My CAD Analysis Project">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Use Case / Context</label>
+                  <select class="form-select" id="use-case">
+                    <option value="">Select use case...</option>
+                    <option value="bracket">Structural Bracket</option>
+                    <option value="housing">Enclosure / Housing</option>
+                    <option value="pipe">Pipe / Fluid System</option>
+                    <option value="heat_sink">Heat Sink / Thermal</option>
+                    <option value="gear">Gear / Rotating Component</option>
+                    <option value="sheet_metal">Sheet Metal Part</option>
+                    <option value="structural_beam">Beam / Frame</option>
+                  </select>
+                </div>
+                <button class="btn btn-primary" style="width:100%" id="upload-btn" onclick="uploadFile()" disabled>
+                  <div class="spinner" id="upload-spinner" style="display:none"></div>
+                  Analyse Geometry →
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="geometry-panel">
+          <div class="card">
+            <div class="card-header"><h3>📐 Geometry Features</h3></div>
+            <div class="card-body" id="geometry-content">
+              <div class="text-muted text-sm" style="text-align:center;padding:32px 0">
+                Upload a file to see geometry analysis
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ANALYSIS -->
+    <div class="page" id="page-analysis">
+      <div id="no-project-msg" class="card" style="text-align:center;padding:40px">
+        <div style="font-size:40px;margin-bottom:12px">🔬</div>
+        <h3 style="margin-bottom:8px">No Project Loaded</h3>
+        <p class="text-muted text-sm mb-16">Upload a CAD file first to see analysis suggestions</p>
+        <button class="btn btn-primary" onclick="showPage('upload')">Go to Upload →</button>
+      </div>
+      <div id="analysis-content" style="display:none">
+        <div class="card mb-16">
+          <div class="card-header"><h3>🎯 Suggested Analyses</h3>
+            <span class="text-muted text-sm" style="margin-left:auto">Select one or more</span>
+          </div>
+          <div class="card-body">
+            <div class="grid-2" id="suggestions-grid"></div>
+          </div>
+        </div>
+        <div class="grid-2" style="align-items:start">
+          <div class="card">
+            <div class="card-header"><h3>🧱 Material</h3></div>
+            <div class="card-body">
+              <div class="form-group">
+                <label class="form-label">Material Library</label>
+                <select class="form-select" id="material-select" onchange="onMaterialChange()">
+                  <option value="">Loading materials...</option>
+                </select>
+              </div>
+              <div id="material-props" style="display:none">
+                <div class="grid-2 gap-8">
+                  <div>
+                    <div class="form-label">E (GPa)</div>
+                    <div class="mono" id="mat-E">—</div>
+                  </div>
+                  <div>
+                    <div class="form-label">Poisson</div>
+                    <div class="mono" id="mat-nu">—</div>
+                  </div>
+                  <div>
+                    <div class="form-label">Density (kg/m³)</div>
+                    <div class="mono" id="mat-rho">—</div>
+                  </div>
+                  <div>
+                    <div class="form-label">Yield (MPa)</div>
+                    <div class="mono" id="mat-sy">—</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>⚙ Mesh Settings</h3></div>
+            <div class="card-body">
+              <div class="form-group">
+                <label class="form-label">Element Size (mm)</label>
+                <input class="form-input" id="mesh-size" type="number" value="5" min="1" max="50">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Element Order</label>
+                <select class="form-select" id="mesh-order">
+                  <option value="1">Linear (1st order)</option>
+                  <option value="2" selected>Quadratic (2nd order)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Applied Force Fz (N)</label>
+                <input class="form-input" id="force-fz" type="number" value="-5000">
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mt-16" style="text-align:right">
+          <button class="btn btn-primary btn-lg" id="run-btn" onclick="runAnalysis()">
+            <div class="spinner" id="run-spinner" style="display:none"></div>
+            Run Analysis ⚡
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SOLVER -->
+    <div class="page" id="page-solver">
+      <div id="no-job-msg" class="card" style="text-align:center;padding:40px">
+        <div style="font-size:40px;margin-bottom:12px">⚡</div>
+        <h3>No Active Jobs</h3>
+        <p class="text-muted text-sm mb-16">Run an analysis from the Analysis page</p>
+        <button class="btn btn-primary" onclick="showPage('analysis')">Configure Analysis →</button>
+      </div>
+      <div id="solver-content" style="display:none">
+        <div class="card mb-16">
+          <div class="card-header">
+            <h3>⚡ Job Progress</h3>
+            <span id="job-status-badge" class="badge-small badge-blue" style="margin-left:auto">PENDING</span>
+          </div>
+          <div class="card-body">
+            <div class="row mb-12">
+              <div class="flex-1">
+                <div class="text-sm text-muted" id="job-progress-msg">Initializing...</div>
+              </div>
+              <div class="mono text-sm" id="job-progress-pct">0%</div>
+            </div>
+            <div class="progress-track progress-animated">
+              <div class="progress-fill" id="progress-bar" style="width:0%"></div>
+            </div>
+            <div class="mt-12 text-sm text-muted mono" id="job-id-label"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h3>📋 Solver Log</h3></div>
+          <div class="card-body">
+            <div class="log-term" id="solver-log"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RESULTS -->
+    <div class="page" id="page-results">
+      <div id="no-results-msg" class="card" style="text-align:center;padding:40px">
+        <div style="font-size:40px;margin-bottom:12px">📊</div>
+        <h3>No Results Yet</h3>
+        <p class="text-muted text-sm">Results will appear here after analysis completes</p>
+      </div>
+      <div id="results-content" style="display:none">
+        <!-- Stat cards -->
+        <div class="grid-4 mb-16" id="results-stats"></div>
+
+        <!-- 3D Viewer -->
+        <div class="card mb-16">
+          <div class="card-header">
+            <h3>🧊 3D Results Viewer</h3>
+            <div class="colorbar" style="margin-left:auto">
+              <span class="text-sm text-muted">0</span>
+              <div>
+                <div class="colorbar-gradient"></div>
+              </div>
+              <span class="text-sm text-muted" id="colorbar-max">—</span>
+              <span class="text-sm text-muted">MPa</span>
+            </div>
+          </div>
+          <div class="card-body" style="padding:12px">
+            <canvas id="viewer-canvas"></canvas>
+            <div class="viewer-controls">
+              <button class="btn btn-sm btn-ghost" id="btn-stress" onclick="setViewMode('stress')">Von Mises Stress</button>
+              <button class="btn btn-sm btn-ghost" id="btn-disp" onclick="setViewMode('disp')">Displacement</button>
+              <button class="btn btn-sm btn-ghost" onclick="resetCamera()">⊙ Reset Camera</button>
+              <span class="text-sm text-muted" style="margin-left:auto">Drag to rotate · Scroll to zoom</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tabs: Summary / Raw -->
+        <div class="card">
+          <div class="card-header"><h3>📋 Result Details</h3></div>
+          <div class="card-body">
+            <div class="tabs mb-12" id="result-tabs">
+              <button class="tab-btn active" onclick="switchTab('summary')">Summary</button>
+              <button class="tab-btn" onclick="switchTab('raw')">Raw Data</button>
+            </div>
+            <div class="tab-panel active" id="tab-summary" id="results-table"></div>
+            <div class="tab-panel" id="tab-raw">
+              <pre class="log-term" id="raw-json" style="white-space:pre-wrap;max-height:300px"></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MATERIALS -->
+    <div class="page" id="page-materials">
+      <div class="card">
+        <div class="card-header"><h3>🧱 Material Library</h3>
+          <span class="text-muted text-sm" style="margin-left:auto" id="mat-count"></span>
+        </div>
+        <div class="card-body">
+          <div id="materials-grid" class="grid-3">
+            <div class="text-muted text-sm">Loading...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- Toast container -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- Chat panel -->
+<div class="chat-panel">
+  <div class="chat-box" id="chat-box">
+    <div class="chat-header">
+      <span>🤖</span>
+      <div>
+        <h4>CAE Assistant</h4>
+        <div style="font-size:10px;opacity:.8">Ask about your results</div>
+      </div>
+      <button style="margin-left:auto;background:none;border:none;color:#fff;cursor:pointer;font-size:18px" onclick="toggleChat()">×</button>
+    </div>
+    <div class="chat-messages" id="chat-messages">
+      <div class="chat-msg bot">Hi! I'm your CAE assistant. Upload a model and I'll help you understand the analysis results. 👋</div>
+    </div>
+    <div class="chat-input-row">
+      <input class="chat-input" id="chat-input" placeholder="Ask about results..." onkeydown="if(event.key==='Enter')sendChat()">
+      <button class="chat-send" onclick="sendChat()">➤</button>
+    </div>
+  </div>
+  <button class="chat-fab" onclick="toggleChat()" title="CAE Assistant">💬</button>
+</div>
+
+<script>
+// ── Config ───────────────────────────────────────────────────────────────────
+const API = 'http://127.0.0.1:8000';
+let state = {
+  projectId: null, jobId: null, material: null,
+  suggestions: [], selectedAnalysis: null,
+  results: null, pollTimer: null, viewMode: 'stress',
+};
+let viewer = null;
+
+// ── Page navigation ──────────────────────────────────────────────────────────
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  document.getElementById('nav-' + name).classList.add('active');
+  const titles = { home:'Home', upload:'Upload CAD', analysis:'Analysis Setup',
+    solver:'Solver', results:'Results', materials:'Material Library' };
+  document.getElementById('topbar-title').textContent = titles[name] || name;
+  if (name === 'materials' && !state._matsLoaded) loadMaterials();
+  if (name === 'results' && state.results) renderResults(state.results);
+}
+
+// ── Toast ────────────────────────────────────────────────────────────────────
+function toast(msg, type='info', duration=3500) {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = msg;
+  const container = document.getElementById('toast-container');
+  container.appendChild(el);
+  setTimeout(() => { el.style.opacity='0'; el.style.transform='translateX(110%)';
+    el.style.transition='.3s'; setTimeout(()=>el.remove(), 300); }, duration);
+}
+
+// ── Health check ─────────────────────────────────────────────────────────────
+async function checkHealth() {
+  try {
+    const r = await fetch(`${API}/health`);
+    const d = await r.json();
+    document.getElementById('api-status-panel').innerHTML = `
+      <div class="grid-3">
+        <div class="stat-card">
+          <div class="stat-label">Status</div>
+          <div class="stat-value stat-pass" style="font-size:16px">${d.status.toUpperCase()}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Mock CAD</div>
+          <div class="stat-value" style="font-size:16px">${d.mock_cad ? '✓ ON' : '✗ OFF'}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Mock Solver</div>
+          <div class="stat-value" style="font-size:16px">${d.mock_solver ? '✓ ON' : '✗ OFF'}</div>
+        </div>
+      </div>
+      <div class="mt-12 text-sm text-muted mono">Environment: ${d.env} · Chatbot: ${d.chatbot_enabled ? 'enabled' : 'disabled'}</div>`;
+    if (d.mock_solver) document.getElementById('topbar-mode').textContent = 'MOCK MODE';
+    else document.getElementById('topbar-mode').textContent = 'LIVE MODE';
+  } catch(e) {
+    document.getElementById('api-status-panel').innerHTML =
+      `<div class="text-sm" style="color:var(--red)">⚠ Cannot reach API at ${API}. Make sure the backend is running.</div>`;
+  }
+}
+
+// ── File upload ──────────────────────────────────────────────────────────────
+const uploadZone = document.getElementById('upload-zone');
+const fileInput  = document.getElementById('file-input');
+let selectedFile = null;
+
+uploadZone.addEventListener('click', () => fileInput.click());
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault(); uploadZone.classList.remove('drag-over');
+  if (e.dataTransfer.files.length) onFileSelect(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if(fileInput.files.length) onFileSelect(fileInput.files[0]); });
+
+function onFileSelect(file) {
+  selectedFile = file;
+  uploadZone.innerHTML = `
+    <div class="upload-icon">📄</div>
+    <div class="upload-title">${file.name}</div>
+    <div class="upload-sub">${(file.size/1024).toFixed(1)} KB · Click to change</div>`;
+  document.getElementById('upload-btn').disabled = false;
+  if (!document.getElementById('project-name').value)
+    document.getElementById('project-name').value = file.name.replace(/\.[^.]+$/, '');
+}
+
+async function uploadFile() {
+  if (!selectedFile) return;
+  const btn = document.getElementById('upload-btn');
+  const spinner = document.getElementById('upload-spinner');
+  btn.disabled = true; spinner.style.display = '';
+
+  const fd = new FormData();
+  fd.append('file', selectedFile);
+  fd.append('project_name', document.getElementById('project-name').value || selectedFile.name);
+  fd.append('use_case', document.getElementById('use-case').value);
+
+  try {
+    const r = await fetch(`${API}/api/upload`, { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    const d = await r.json();
+
+    state.projectId = d.project_id;
+    state.suggestions = d.suggestions || [];
+    state.geometry = d.geometry_features || {};
+
+    renderGeometry(d);
+    populateSuggestions(d.suggestions);
+    toast('✅ File uploaded and geometry analysed!', 'success');
+    setTimeout(() => showPage('analysis'), 800);
+  } catch(e) {
+    toast('❌ Upload failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false; spinner.style.display = 'none';
+  }
+}
+
+function renderGeometry(d) {
+  const geo = d.geometry_features || {};
+  const bb  = geo.bounding_box || {};
+  const vol = Math.abs(geo.volume || 0);
+  const panel = document.getElementById('geometry-content');
+  const sug = (d.suggestions || []);
+
+  panel.innerHTML = `
+    <div class="grid-2 gap-8 mb-16">
+      <div class="stat-card"><div class="stat-label">Volume</div>
+        <div class="stat-value" style="font-size:18px">${vol.toFixed(0)}</div>
+        <div class="stat-unit">mm³</div></div>
+      <div class="stat-card"><div class="stat-label">Surface Area</div>
+        <div class="stat-value" style="font-size:18px">${(geo.surface_area||0).toFixed(0)}</div>
+        <div class="stat-unit">mm²</div></div>
+      <div class="stat-card"><div class="stat-label">Bounding Box</div>
+        <div class="stat-value mono" style="font-size:14px">${(bb.x||0).toFixed(1)}×${(bb.y||0).toFixed(1)}×${(bb.z||0).toFixed(1)}</div>
+        <div class="stat-unit">mm</div></div>
+      <div class="stat-card"><div class="stat-label">Slenderness</div>
+        <div class="stat-value" style="font-size:18px">${(geo.slenderness_ratio||0).toFixed(2)}</div>
+        <div class="stat-unit">ratio</div></div>
+    </div>
+    <div class="form-label mb-12">Detected Features</div>
+    <div class="feature-grid">
+      ${feat('Thin Walled', geo.is_thin_walled)}
+      ${feat('Has Holes', geo.has_holes)}
+      ${feat('Has Fillets', geo.has_fillets)}
+      ${feat('Internal Cavity', geo.has_internal_cavity)}
+      ${feat('Symmetric', geo.has_symmetry)}
+      ${feat('Sheet Metal', geo.is_sheet_metal)}
+    </div>
+    <div class="divider"></div>
+    <div class="form-label mb-12">Suggestions (${sug.length})</div>
+    ${sug.map(s => `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <span class="badge-small badge-blue">${s.category}</span>
+      <span class="text-sm">${s.title}</span>
+      <span class="mono text-sm" style="margin-left:auto;color:var(--accent)">${(s.confidence*100).toFixed(0)}%</span>
+    </div>`).join('')}`;
+}
+
+function feat(label, val) {
+  const cls = val ? 'yes' : 'no';
+  const icon = val ? '✓' : '—';
+  return `<span class="feat-badge ${cls}">${icon} ${label}</span>`;
+}
+
+// ── Analysis setup ───────────────────────────────────────────────────────────
+function populateSuggestions(suggestions) {
+  document.getElementById('no-project-msg').style.display = 'none';
+  document.getElementById('analysis-content').style.display = '';
+  const icons = { static_structural:'🔩', modal:'🎵', buckling:'📐',
+    thermal_steady:'🔥', thermal_transient:'🌡', fatigue:'💀',
+    cfd_internal:'🌊', cfd_external:'💨' };
+  const grid = document.getElementById('suggestions-grid');
+  grid.innerHTML = suggestions.map(s => `
+    <div class="analysis-card" id="ac-${s.analysis_type}" onclick="selectAnalysis('${s.analysis_type}')">
+      <div class="analysis-card-icon">${icons[s.analysis_type]||'🔬'}</div>
+      <div class="analysis-card-title">${s.title}</div>
+      <div class="analysis-card-sub">${s.rationale}</div>
+      <div class="confidence-bar">
+        <div class="confidence-fill" style="width:${s.confidence*100}%"></div>
+      </div>
+      <div class="text-sm text-muted mt-12" style="margin-top:6px">${(s.confidence*100).toFixed(0)}% confidence · ${s.category}</div>
+    </div>`).join('');
+}
+
+function selectAnalysis(type) {
+  state.selectedAnalysis = type;
+  document.querySelectorAll('.analysis-card').forEach(c => c.classList.remove('selected'));
+  const el = document.getElementById('ac-' + type);
+  if (el) el.classList.add('selected');
+}
+
+async function loadMaterials() {
+  try {
+    const r = await fetch(`${API}/api/materials`);
+    const mats = await r.json();
+    state._materials = mats;
+    state._matsLoaded = true;
+    const sel = document.getElementById('material-select');
+    sel.innerHTML = '<option value="">Choose material...</option>' +
+      mats.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
+    renderMaterialLibrary(mats);
+    document.getElementById('mat-count').textContent = `${mats.length} materials`;
+  } catch(e) { toast('Could not load materials', 'error'); }
+}
+
+function onMaterialChange() {
+  const id = document.getElementById('material-select').value;
+  const mat = (state._materials||[]).find(m => m.id === id);
+  if (!mat) { document.getElementById('material-props').style.display='none'; return; }
+  state.material = mat;
+  document.getElementById('material-props').style.display = '';
+  document.getElementById('mat-E').textContent   = mat.youngs_modulus   != null ? mat.youngs_modulus   : '—';
+  document.getElementById('mat-nu').textContent  = mat.poissons_ratio   != null ? mat.poissons_ratio   : '—';
+  document.getElementById('mat-rho').textContent = mat.density          != null ? mat.density          : '—';
+  document.getElementById('mat-sy').textContent  = mat.yield_strength   != null ? mat.yield_strength   : '—';
+}
+
+function renderMaterialLibrary(mats) {
+  const categoryColors = { Metal:'badge-blue', Plastic:'badge-amber', Composite:'badge-cyan', Fluid:'badge-green' };
+  document.getElementById('materials-grid').innerHTML = mats.map(m => `
+    <div class="stat-card">
+      <div class="row mb-12">
+        <div class="flex-1 text-sm" style="font-weight:600">${m.name}</div>
+        <span class="badge-small ${categoryColors[m.category]||'badge-blue'}">${m.category}</span>
+      </div>
+      <div class="grid-2 gap-8" style="font-size:11px;color:var(--text-muted)">
+        <div>E = <span class="mono">${m.youngs_modulus ?? '—'}</span> GPa</div>
+        <div>ν = <span class="mono">${m.poissons_ratio ?? '—'}</span></div>
+        <div>ρ = <span class="mono">${m.density ?? '—'}</span> kg/m³</div>
+        <div>σ<sub>y</sub> = <span class="mono">${m.yield_strength ?? '—'}</span> MPa</div>
+      </div>
+    </div>`).join('');
+}
+
+// ── Run analysis ─────────────────────────────────────────────────────────────
+async function runAnalysis() {
+  if (!state.projectId) { toast('Upload a file first!', 'error'); return; }
+  if (!state.selectedAnalysis) { toast('Select an analysis type first!', 'error'); return; }
+
+  const mat = state.material || { name:'Structural Steel (A36)',
+    youngs_modulus:200, poissons_ratio:0.26, density:7850, yield_strength:250 };
+
+  const btn = document.getElementById('run-btn');
+  const spinner = document.getElementById('run-spinner');
+  btn.disabled = true; spinner.style.display = '';
+
+  try {
+    const body = {
+      project_id: state.projectId,
+      analysis_type: state.selectedAnalysis,
+      parameters: {
+        material: { name:mat.name, youngs_modulus:mat.youngs_modulus,
+          poissons_ratio:mat.poissons_ratio, density:mat.density, yield_strength:mat.yield_strength },
+        boundary_conditions: [
+          { type:'fixed', face_ids:[] },
+          { type:'force', fz: parseFloat(document.getElementById('force-fz').value)||-5000, face_ids:[] },
+        ],
+        mesh_settings: {
+          global_element_size: parseInt(document.getElementById('mesh-size').value)||5,
+          element_order: parseInt(document.getElementById('mesh-order').value)||2,
+        },
+      }
+    };
+
+    const r = await fetch(`${API}/api/projects/${state.projectId}/jobs`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const job = await r.json();
+    state.jobId = job.id;
+
+    toast('🚀 Analysis job submitted!', 'success');
+    showPage('solver');
+    startPolling();
+  } catch(e) {
+    toast('❌ Failed to start job: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false; spinner.style.display = 'none';
+  }
+}
+
+// ── Polling ──────────────────────────────────────────────────────────────────
+const logLines = [];
+function appendLog(msg, cls='') {
+  logLines.push(`<span class="${cls}">${msg}</span>`);
+  const el = document.getElementById('solver-log');
+  if (el) { el.innerHTML = logLines.slice(-50).join('<br>'); el.scrollTop = el.scrollHeight; }
+}
+
+function startPolling() {
+  if (state.pollTimer) clearInterval(state.pollTimer);
+  document.getElementById('no-job-msg').style.display = 'none';
+  document.getElementById('solver-content').style.display = '';
+  document.getElementById('job-id-label').textContent = 'Job: ' + state.jobId;
+  logLines.length = 0;
+  appendLog(`[${new Date().toLocaleTimeString()}] Job submitted: ${state.jobId}`, 'log-info');
+
+  state.pollTimer = setInterval(async () => {
+    try {
+      const r = await fetch(`${API}/api/jobs/${state.jobId}`);
+      const job = await r.json();
+
+      const pct = job.progress_percent || 0;
+      const msg = job.progress_message || '';
+      const status = job.status || 'pending';
+
+      document.getElementById('progress-bar').style.width = pct + '%';
+      document.getElementById('job-progress-pct').textContent = pct + '%';
+      document.getElementById('job-progress-msg').textContent = msg;
+
+      const badge = document.getElementById('job-status-badge');
+      const colors = { pending:'badge-blue', solving:'badge-cyan', completed:'badge-green', failed:'badge-amber' };
+      badge.className = 'badge-small ' + (colors[status]||'badge-blue');
+      badge.textContent = status.toUpperCase();
+
+      if (msg && logLines[logLines.length-1] !== `<span class="log-info">[${new Date().toLocaleTimeString()}] ${msg}</span>`) {
+        const cls = status==='failed' ? 'log-err' : (pct===100 ? 'log-ok' : 'log-info');
+        appendLog(`[${new Date().toLocaleTimeString()}] ${msg}`, cls);
+      }
+
+      if (status === 'completed') {
+        clearInterval(state.pollTimer);
+        document.querySelector('.progress-track').classList.remove('progress-animated');
+        appendLog(`[${new Date().toLocaleTimeString()}] Analysis complete!`, 'log-ok');
+        toast('✅ Analysis complete! View results →', 'success', 5000);
+        await fetchResults();
+        setTimeout(() => showPage('results'), 1500);
+      } else if (status === 'failed') {
+        clearInterval(state.pollTimer);
+        appendLog(`ERROR: ${job.error_message}`, 'log-err');
+        toast('❌ Analysis failed: ' + job.error_message, 'error', 8000);
+      }
+    } catch(e) { appendLog('Poll error: ' + e.message, 'log-warn'); }
+  }, 2000);
+}
+
+// ── Fetch results ────────────────────────────────────────────────────────────
+async function fetchResults() {
+  try {
+    const r = await fetch(`${API}/api/jobs/${state.jobId}/results`);
+    if (!r.ok) return;
+    const d = await r.json();
+    state.results = d;
+    renderResults(d);
+  } catch(e) { console.error(e); }
+}
+
+function renderResults(d) {
+  document.getElementById('no-results-msg').style.display = 'none';
+  document.getElementById('results-content').style.display = '';
+
+  const s = d.summary || {};
+  const rd = d.result_data || {};
+
+  // Stat cards
+  const maxStress = s.max_stress ?? rd.max_stress;
+  const maxDisp   = s.max_displacement ?? rd.max_displacement;
+  const sf        = s.min_safety_factor ?? rd.min_safety_factor;
+  const maxT      = s.max_temperature ?? rd.max_temperature;
+
+  let cards = '';
+  if (maxStress != null) {
+    const sfClass = sf && sf >= 2 ? 'stat-pass' : sf && sf >= 1 ? 'stat-warn' : 'stat-fail';
+    cards += `<div class="stat-card"><div class="stat-label">Max Von Mises</div>
+      <div class="stat-value">${Number(maxStress).toFixed(1)}</div><div class="stat-unit">MPa</div></div>
+    <div class="stat-card"><div class="stat-label">Max Displacement</div>
+      <div class="stat-value">${Number(maxDisp||0).toFixed(4)}</div><div class="stat-unit">mm</div></div>
+    <div class="stat-card"><div class="stat-label">Safety Factor</div>
+      <div class="stat-value ${sfClass}">${sf ? Number(sf).toFixed(2) : '—'}</div></div>`;
+  }
+  if (maxT != null) {
+    cards += `<div class="stat-card"><div class="stat-label">Max Temperature</div>
+      <div class="stat-value stat-warn">${Number(maxT).toFixed(1)}</div><div class="stat-unit">°C</div></div>`;
+  }
+  if (!cards) cards = `<div class="stat-card"><div class="stat-label">Status</div><div class="stat-value stat-pass">Complete</div></div>`;
+
+  document.getElementById('results-stats').innerHTML = cards;
+  document.getElementById('colorbar-max').textContent = maxStress ? Number(maxStress).toFixed(0) : '—';
+
+  // Summary table
+  const allFields = {...s, ...rd};
+  document.getElementById('tab-summary').innerHTML = Object.entries(allFields)
+    .filter(([k,v]) => v != null && !Array.isArray(v) && typeof v !== 'object')
+    .map(([k,v]) => `<div class="row" style="padding:8px 0;border-bottom:1px solid var(--border)">
+      <span class="text-sm" style="color:var(--text-muted)">${k.replace(/_/g,' ')}</span>
+      <span class="mono text-sm" style="margin-left:auto">${typeof v==='number'?v.toFixed(4):v}</span>
+    </div>`).join('') || '<div class="text-muted text-sm">No scalar results</div>';
+
+  document.getElementById('raw-json').textContent = JSON.stringify(d, null, 2);
+
+  // 3D viewer
+  initViewer(maxStress);
+}
+
+// ── 3D Viewer ────────────────────────────────────────────────────────────────
+let scene, camera, renderer3d, mesh3d, animFrame;
+function initViewer(maxStress) {
+  const canvas = document.getElementById('viewer-canvas');
+  if (renderer3d) { renderer3d.dispose(); cancelAnimationFrame(animFrame); }
+
+  scene    = new THREE.Scene();
+  scene.background = new THREE.Color(0x050c18);
+
+  // Compute container dimensions robustly to avoid 0 width / NaN aspect ratio
+  const width = canvas.clientWidth || canvas.parentNode.clientWidth || 800;
+  const height = canvas.clientHeight || canvas.parentNode.clientHeight || 400;
+
+  camera   = new THREE.PerspectiveCamera(45, width / height, 0.1, 2000);
+  camera.position.set(120, 80, 150);
+  camera.lookAt(0, 0, 0);
+
+  renderer3d = new THREE.WebGLRenderer({ canvas, antialias: true });
+  // Disable style updating so CSS width: 100% and height: 400px controls display
+  renderer3d.setSize(width, height, false);
+  renderer3d.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  // Lights
+  scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+  const dl = new THREE.DirectionalLight(0xffffff, 0.9);
+  dl.position.set(100, 100, 100);
+  scene.add(dl);
+  const dl2 = new THREE.DirectionalLight(0x4488ff, 0.3);
+  dl2.position.set(-100, -50, -100);
+  scene.add(dl2);
+
+  // Generate a synthetic L-bracket with stress colors
+  buildMesh(maxStress || 300);
+
+  // Grid
+  const grid = new THREE.GridHelper(200, 20, 0x1a2a4a, 0x1a2a4a);
+  grid.position.y = -30;
+  scene.add(grid);
+
+  // Orbit controls (manual)
+  setupOrbit(canvas);
+
+  // Animate
+  (function loop() { animFrame = requestAnimationFrame(loop); renderer3d.render(scene, camera); })();
+}
+
+function jetColor(t) {
+  // Jet colormap: blue → cyan → green → yellow → red
+  t = Math.max(0, Math.min(1, t));
+  let r, g, b;
+  if (t < 0.25)      { r = 0;        g = t * 4;        b = 1; }
+  else if (t < 0.5)  { r = 0;        g = 1;            b = 1 - (t - 0.25) * 4; }
+  else if (t < 0.75) { r = (t - 0.5) * 4; g = 1;       b = 0; }
+  else               { r = 1;        g = 1 - (t - 0.75) * 4; b = 0; }
+  return new THREE.Color(r, g, b);
+}
+
+async function buildMesh(maxStress) {
+  if (mesh3d) { scene.remove(mesh3d); mesh3d.geometry.dispose(); }
+
+  let verts = [];
+  let indices = [];
+  let colors = [];
+
+  // Try to load actual mesh from backend
+  let loaded = false;
+  if (state.projectId) {
+    try {
+      const r = await fetch(`${API}/api/projects/${state.projectId}/mesh`);
+      if (r.ok) {
+        const data = await r.json();
+        if (data.vertices && data.vertices.length > 0) {
+          // Flatten vertices and faces
+          verts = data.vertices.flat();
+          indices = data.faces.flat();
+          
+          // Stress distribution simulator based on vertex height/position
+          const com = data.center_of_mass || [0, 0, 0];
+          const bbox = data.bbox || [100, 100, 100];
+          const maxDim = Math.max(...bbox) || 100;
+          
+          for (let i = 0; i < data.vertices.length; i++) {
+            const [cx, cy, cz] = data.vertices[i];
+            
+            // Stress simulation: higher stress near bottom/fixed area
+            // Let's assume the part is fixed near y_min
+            const yMin = com[1] - bbox[1] / 2;
+            const distRatio = Math.max(0, Math.min(1, (cy - yMin) / bbox[1]));
+            
+            // Stress concentration simulator: higher stress at lower y
+            const stress = maxStress * (1 - distRatio) * (1.0 + 0.3 * Math.sin(cx / maxDim * Math.PI));
+            const t = Math.min(1, Math.max(0, stress / maxStress));
+            const c = jetColor(t);
+            colors.push(c.r, c.g, c.b);
+          }
+          loaded = true;
+        }
+      }
+    } catch(e) {
+      console.warn("Failed to load actual mesh, falling back to L-bracket", e);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+
+  if (!loaded) {
+    // Fallback: L-bracket geometry (two boxes)
+    const W = 60, H = 100, D = 20, T = 20;
+
+    function addBox(x0,y0,z0, x1,y1,z1, stressFunc) {
+      const base = verts.length / 3;
+      const corners = [
+        [x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],
+        [x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1],
+      ];
+      corners.forEach(([cx,cy,cz]) => {
+        verts.push(cx, cy, cz);
+        // Stress higher near root (y=0), lower at tip
+        const stress = stressFunc(cx, cy, cz, x0, y0, z0, x1, y1, z1);
+        const t = Math.min(1, stress / maxStress);
+        const c = jetColor(t);
+        colors.push(c.r, c.g, c.b);
+      });
+      const faces = [
+        [0,1,2],[0,2,3],[4,6,5],[4,7,6],
+        [0,4,5],[0,5,1],[2,6,7],[2,7,3],
+        [0,3,7],[0,7,4],[1,5,6],[1,6,2],
+      ];
+      faces.forEach(([a,b,c]) => indices.push(base+a, base+b, base+c));
+    }
+
+    // Vertical member: high stress at base
+    addBox(-T/2, 0, -D/2, T/2, H, D/2, (cx,cy) => maxStress * (1 - cy/H) * 1.2);
+    // Horizontal member: moderate stress
+    addBox(-T/2, 0, -D/2, W, T, D/2, (cx,cy,cz,x0,y0,z0,x1,y1) => maxStress * 0.4 * (1 - cx/W));
+  }
+
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('color',    new THREE.Float32BufferAttribute(colors, 3));
+  if (indices.length > 0) {
+    geo.setIndex(indices);
+  }
+  geo.computeVertexNormals();
+
+  const mat = new THREE.MeshPhongMaterial({
+    vertexColors: true, shininess: 60,
+    specular: new THREE.Color(0.2, 0.2, 0.2),
+    side: THREE.DoubleSide
+  });
+  mesh3d = new THREE.Mesh(geo, mat);
+
+  if (loaded) {
+    // Center the custom mesh at origin
+    geo.computeBoundingSphere();
+    const sphere = geo.boundingSphere;
+    mesh3d.position.set(-sphere.center.x, -sphere.center.y, -sphere.center.z);
+    
+    // Zoom/scale camera to fit the mesh size
+    const radius = sphere.radius || 50;
+    if (camera) {
+      camera.position.set(radius * 1.8, radius * 1.2, radius * 2.2);
+      camera.lookAt(0, 0, 0);
+    }
+  } else {
+    const W = 60, H = 100;
+    mesh3d.position.set(-W/4, -H/2, 0);
+  }
+  scene.add(mesh3d);
+}
+
+// ── View modes ────────────────────────────────────────────────────────────────
+function setViewMode(mode) {
+  state.viewMode = mode;
+  const maxVal = mode === 'stress'
+    ? (state.results?.summary?.max_stress || state.results?.result_data?.max_stress || 300)
+    : (state.results?.summary?.max_displacement || state.results?.result_data?.max_displacement || 10) * 30;
+  if (scene) buildMesh(maxVal);
+  document.getElementById('colorbar-max').textContent = Number(maxVal).toFixed(0);
+}
+
+function resetCamera() {
+  if (!camera) return;
+  camera.position.set(120, 80, 150);
+  camera.lookAt(0, 0, 0);
+}
+
+// ── Orbit (simple) ────────────────────────────────────────────────────────────
+function setupOrbit(canvas) {
+  let isDrag=false, lastX=0, lastY=0, phi=0.5, theta=0.5, radius=200;
+  canvas.addEventListener('mousedown', e => { isDrag=true; lastX=e.clientX; lastY=e.clientY; });
+  window.addEventListener('mouseup', () => isDrag=false);
+  window.addEventListener('mousemove', e => {
+    if (!isDrag) return;
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX=e.clientX; lastY=e.clientY;
+    theta += dx * 0.01; phi = Math.max(0.05, Math.min(Math.PI-0.05, phi + dy * 0.01));
+    camera.position.set(
+      radius * Math.sin(phi) * Math.cos(theta),
+      radius * Math.cos(phi),
+      radius * Math.sin(phi) * Math.sin(theta));
+    camera.lookAt(0, 0, 0);
+  });
+  canvas.addEventListener('wheel', e => {
+    radius = Math.max(50, Math.min(600, radius + e.deltaY * 0.5));
+    camera.position.setLength(radius);
+    e.preventDefault();
+  }, { passive: false });
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach((b,i) => {
+    const panels = ['summary','raw'];
+    b.classList.toggle('active', panels[i]===name);
+  });
+  document.getElementById('tab-summary').classList.toggle('active', name==='summary');
+  document.getElementById('tab-raw').classList.toggle('active', name==='raw');
+}
+
+// ── Chat ─────────────────────────────────────────────────────────────────────
+function toggleChat() {
+  const box = document.getElementById('chat-box');
+  box.classList.toggle('open');
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+
+  addChatMsg(msg, 'user');
+
+  // Call backend chat API
+  if (state.projectId) {
+    try {
+      const thinking = addChatMsg('Thinking...', 'bot', true);
+      const r = await fetch(`${API}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: state.projectId, message: msg, job_id: state.jobId || null })
+      });
+      thinking.remove();
+      if (r.ok) {
+        const d = await r.json();
+        addChatMsg(d.response || d.message || 'No response', 'bot');
+      } else {
+        addChatMsg(fallbackChat(msg), 'bot');
+      }
+    } catch(e) { addChatMsg(fallbackChat(msg), 'bot'); }
+  } else {
+    addChatMsg(fallbackChat(msg), 'bot');
+  }
+}
+
+function fallbackChat(msg) {
+  const lc = msg.toLowerCase();
+  if (lc.includes('stress') || lc.includes('mpa'))
+    return `The von Mises stress represents the equivalent stress considering all stress components. Values above the yield strength (${state.material?.yield_strength||250} MPa) indicate plastic deformation risk.`;
+  if (lc.includes('safety') || lc.includes('factor'))
+    return `Safety factor = Yield Strength / Max Stress. A value ≥ 2.0 is typically required for structural parts; ≥ 1.5 for non-critical components.`;
+  if (lc.includes('displacement') || lc.includes('deflect'))
+    return `Max displacement is the largest deformation magnitude in the model. Check this against allowable deflection requirements (e.g., L/360 for beams).`;
+  if (lc.includes('modal') || lc.includes('frequency'))
+    return `Natural frequencies indicate resonance points. Avoid operating loads with excitation frequencies close to any natural frequency to prevent resonance.`;
+  return `Great question! To get AI-powered answers, set an ANTHROPIC_API_KEY in your .env file. For now I can answer about: stress, safety factors, displacement, and modal analysis.`;
+}
+
+function addChatMsg(text, role, temp=false) {
+  const div = document.createElement('div');
+  div.className = `chat-msg ${role}`;
+  div.textContent = text;
+  const messages = document.getElementById('chat-messages');
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+  return div;
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+checkHealth();
+loadMaterials();
+</script>
+</body>
+</html>

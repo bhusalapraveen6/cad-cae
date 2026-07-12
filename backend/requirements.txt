@@ -1,0 +1,63 @@
+# ── Core Web Framework ────────────────────────────────────────
+fastapi[standard]==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+aiofiles==24.1.0
+httpx==0.28.1
+websockets==13.1
+
+# ── Task Queue ────────────────────────────────────────────────
+celery[redis]==5.4.0
+redis==5.2.0
+flower==2.0.1
+
+# ── Database ──────────────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.36
+aiosqlite==0.20.0          # SQLite async (local dev)
+asyncpg==0.30.0            # PostgreSQL async (production)
+alembic==1.14.0
+pydantic-settings==2.7.0
+pydantic[email]==2.10.3
+
+# ── CAD / Mesh Processing ─────────────────────────────────────
+trimesh==4.5.3             # STL/OBJ parsing (works on Windows natively)
+numpy==2.2.0
+numpy-stl==3.1.2
+# gmsh==4.13.1             # Uncomment in Docker (binary bundled)
+meshio==5.3.5
+scipy==1.14.1
+shapely==2.0.6             # 2D polygon ops for cross-section analysis
+
+# ── Results / Visualization ───────────────────────────────────
+pyvista==0.44.1            # VTK-based post-processing
+vtk==9.3.1
+
+# ── Report Generation ─────────────────────────────────────────
+reportlab==4.2.5           # PDF export
+python-docx==1.1.2         # DOCX export
+Pillow==11.0.0             # Image processing for reports
+
+# ── Chatbot / RAG ─────────────────────────────────────────────
+anthropic==0.40.0          # Claude API
+chromadb==0.6.0            # Vector store
+sentence-transformers==3.3.1  # Embeddings for RAG
+
+# ── Storage ───────────────────────────────────────────────────
+boto3==1.36.0              # S3-compatible storage
+aiohttp==3.11.10
+
+# ── Utilities ─────────────────────────────────────────────────
+python-jose[cryptography]==3.3.0   # JWT (for auth in later phase)
+passlib[bcrypt]==1.7.4             # Password hashing
+psutil==6.1.0
+python-slugify==8.0.4
+orjson==3.10.12            # Fast JSON serialization
+structlog==24.4.0          # Structured logging
+tenacity==9.0.0            # Retry logic for solver calls
+
+# ── Dev / Testing ─────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.1
+pytest-mock==3.14.0
+faker==33.1.0
