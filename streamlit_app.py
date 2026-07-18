@@ -684,7 +684,7 @@ with tab1:
 
             if vertices and faces:
                 fig = get_plotly_mesh(vertices, faces)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="geometry_mesh_viewer")
             else:
                 st.info("Upload an STL/OBJ or select a project to display the 3D viewer.")
 
@@ -985,7 +985,7 @@ with tab3:
 
             if vertices and faces:
                 fig = get_plotly_mesh(vertices, faces, active_job["analysis_type"], res.get("result_data", res), field_choice)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="results_mesh_viewer")
             else:
                 st.error("Failed to load CAD mesh vertices for results post-processing.")
                 
