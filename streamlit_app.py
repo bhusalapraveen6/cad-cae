@@ -42,97 +42,140 @@ st.set_page_config(
 )
 
 # Custom CSS for modern design aesthetics matching the React dashboard
-st.markdown("""
-<style>
-    /* Styling overrides */
-    .stApp {
-        background-color: #060d1a;
-        color: #e8f0fe;
-    }
-    h1, h2, h3, h4, h5, h6 {
-        color: #00e5ff !important;
-        font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
-    }
-    p, span, label, li {
-        color: #8ba3c7;
-    }
-    /* Buttons */
-    .stButton>button {
-        background: linear-gradient(135deg, #2979ff, #00e5ff) !important;
-        color: white !important;
-        font-weight: 600 !important;
-        border-radius: 8px !important;
-        border: none !important;
-        padding: 0.5rem 1.5rem !important;
-        box-shadow: 0 4px 16px rgba(0, 229, 255, 0.2) !important;
-        transition: all 0.2s !important;
-    }
-    .stButton>button:hover {
-        transform: translateY(-1px) !important;
-        box-shadow: 0 6px 20px rgba(0, 229, 255, 0.4) !important;
-    }
-    /* Cards styling */
-    .metric-card {
-        background: rgba(17, 34, 64, 0.85);
-        border: 1px solid rgba(41, 121, 255, 0.2);
-        border-radius: 12px;
-        padding: 20px;
-        margin-bottom: 15px;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-        backdrop-filter: blur(12px);
-    }
-    .metric-title {
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: #4a6080;
-    }
-    .metric-value {
-        font-size: 26px;
-        font-weight: 700;
-        color: #e8f0fe;
-        margin-top: 4px;
-        font-family: 'JetBrains Mono', monospace;
-    }
-    .suggestion-card {
-        background: rgba(23, 42, 74, 0.7);
-        border: 1px solid rgba(0, 229, 255, 0.25);
-        border-radius: 10px;
-        padding: 16px;
-        margin-bottom: 12px;
-    }
-    .suggestion-title {
-        font-weight: 600;
-        color: #00e5ff !important;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    .badge {
-        font-size: 10px;
-        font-weight: 600;
-        padding: 2px 8px;
-        border-radius: 12px;
-        display: inline-block;
-    }
-    .badge-high {
-        background: rgba(255, 82, 82, 0.2);
-        color: #ff5252;
-        border: 1px solid rgba(255, 82, 82, 0.4);
-    }
-    .badge-medium {
-        background: rgba(255, 171, 64, 0.2);
-        color: #ffab40;
-        border: 1px solid rgba(255, 171, 64, 0.4);
-    }
-    .badge-low {
-        background: rgba(0, 230, 118, 0.2);
-        color: #00e676;
-        border: 1px solid rgba(0, 230, 118, 0.4);
-    }
-</style>
-""", unsafe_allow_html=True)
+if "theme" not in st.session_state:
+    st.session_state.theme = "Dark"
+
+def apply_theme_css():
+    if st.session_state.theme == "Light":
+        st.markdown("""
+        <style>
+            .stApp {
+                background-color: #f8f9fa !important;
+                color: #212529 !important;
+            }
+            h1, h2, h3, h4, h5, h6 {
+                color: #1976d2 !important;
+                font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+            }
+            p, span, label, li, .stMarkdown p {
+                color: #495057 !important;
+            }
+            /* Buttons */
+            .stButton>button {
+                background: linear-gradient(135deg, #1565c0, #1976d2) !important;
+                color: white !important;
+                font-weight: 600 !important;
+                border-radius: 8px !important;
+                border: none !important;
+                padding: 0.5rem 1.5rem !important;
+                box-shadow: 0 4px 12px rgba(25, 118, 210, 0.2) !important;
+            }
+            /* Sidebar */
+            [data-testid="stSidebar"] {
+                background-color: #e9ecef !important;
+            }
+            [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+                color: #1565c0 !important;
+            }
+            [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] label {
+                color: #495057 !important;
+            }
+            /* Cards styling */
+            .metric-card {
+                background: #ffffff !important;
+                border: 1px solid #dee2e6 !important;
+                border-radius: 12px;
+                padding: 20px;
+                margin-bottom: 15px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.05) !important;
+            }
+            .metric-title {
+                color: #6c757d !important;
+            }
+            .metric-value {
+                color: #212529 !important;
+            }
+            .suggestion-card {
+                background: #f1f3f5 !important;
+                border: 1px solid #ced4da !important;
+                border-radius: 10px;
+                padding: 16px;
+                margin-bottom: 12px;
+            }
+            .suggestion-title {
+                color: #1976d2 !important;
+            }
+            /* Form / inputs */
+            div[data-baseweb="select"] > div {
+                background-color: #ffffff !important;
+                color: #212529 !important;
+                border-color: #ced4da !important;
+            }
+            div[data-baseweb="input"] input {
+                background-color: #ffffff !important;
+                color: #212529 !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <style>
+            .stApp {
+                background-color: #060d1a !important;
+                color: #e8f0fe !important;
+            }
+            h1, h2, h3, h4, h5, h6 {
+                color: #00e5ff !important;
+                font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+            }
+            p, span, label, li, .stMarkdown p {
+                color: #8ba3c7 !important;
+            }
+            /* Buttons */
+            .stButton>button {
+                background: linear-gradient(135deg, #2979ff, #00e5ff) !important;
+                color: white !important;
+                font-weight: 600 !important;
+                border-radius: 8px !important;
+                border: none !important;
+                padding: 0.5rem 1.5rem !important;
+                box-shadow: 0 4px 16px rgba(0, 229, 255, 0.2) !important;
+                transition: all 0.2s !important;
+            }
+            .stButton>button:hover {
+                transform: translateY(-1px) !important;
+                box-shadow: 0 6px 20px rgba(0, 229, 255, 0.4) !important;
+            }
+            /* Cards styling */
+            .metric-card {
+                background: rgba(17, 34, 64, 0.85) !important;
+                border: 1px solid rgba(41, 121, 255, 0.2) !important;
+                border-radius: 12px;
+                padding: 20px;
+                margin-bottom: 15px;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.4) !important;
+                backdrop-filter: blur(12px);
+            }
+            .metric-title {
+                color: #4a6080 !important;
+            }
+            .metric-value {
+                color: #e8f0fe !important;
+            }
+            .suggestion-card {
+                background: rgba(23, 42, 74, 0.7) !important;
+                border: 1px solid rgba(0, 229, 255, 0.25) !important;
+                border-radius: 10px;
+                padding: 16px;
+                margin-bottom: 12px;
+            }
+            .suggestion-title {
+                color: #00e5ff !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
+apply_theme_css()
 
 # ── Helper for Running Async Coroutines in Streamlit ─────────────────────────
 def run_async(coro):
@@ -485,16 +528,19 @@ def get_plotly_mesh(vertices, faces, analysis_type=None, result_data=None, field
     )
 
     fig = go.Figure(data=[mesh_trace])
+    is_light = st.session_state.get("theme") == "Light"
+    paper_bg = "#ffffff" if is_light else "#0d1b2e"
+    title_color = "#1976d2" if is_light else "#00e5ff"
     fig.update_layout(
-        title=dict(text=title, font=dict(color="#00e5ff")),
-        paper_bgcolor="#0d1b2e",
-        plot_bgcolor="#0d1b2e",
+        title=dict(text=title, font=dict(color=title_color)),
+        paper_bgcolor=paper_bg,
+        plot_bgcolor=paper_bg,
         margin=dict(l=0, r=0, t=40, b=0),
         scene=dict(
             xaxis=dict(visible=False),
             yaxis=dict(visible=False),
             zaxis=dict(visible=False),
-            bgcolor="#0d1b2e"
+            bgcolor=paper_bg
         ),
         height=500
     )
@@ -667,6 +713,18 @@ with st.sidebar:
         st.session_state.active_project_id = selected_id
         st.session_state.active_job_id = None
         st.session_state.chat_messages = []
+        st.rerun()
+
+    st.write("---")
+    st.subheader("🎨 Customize Interface")
+    theme_choice = st.selectbox(
+        "Theme Mode",
+        options=["Dark Mode", "Light Mode"],
+        index=0 if st.session_state.theme == "Dark" else 1
+    )
+    new_theme = "Dark" if theme_choice == "Dark Mode" else "Light"
+    if new_theme != st.session_state.theme:
+        st.session_state.theme = new_theme
         st.rerun()
 
 
