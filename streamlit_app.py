@@ -640,22 +640,32 @@ with st.sidebar:
         if res:
             projects = res
 
-    project_options = {p["name"]: p["id"] for p in projects}
+    # Build options with a default option for starting/viewing new uploads
+    project_options = {"🆕 Start New Project": None}
+    for p in projects:
+        project_options[p["name"]] = p["id"]
     project_names = list(project_options.keys())
 
-    if project_names:
-        selected_project_name = st.selectbox(
-            "Select Existing Project",
-            options=project_names,
-            index=0 if st.session_state.active_project_id is None else project_names.index(
-                [name for name, pid in project_options.items() if pid == st.session_state.active_project_id][0]
-                if any(pid == st.session_state.active_project_id for pid in project_options.values()) else project_names[0]
-            )
-        )
-        st.session_state.active_project_id = project_options[selected_project_name]
-    else:
-        st.info("No active projects. Upload a CAD file to get started!")
-        st.session_state.active_project_id = None
+    # Determine default selected index
+    default_index = 0
+    if st.session_state.active_project_id is not None:
+        for idx, pid in enumerate(project_options.values()):
+            if pid == st.session_state.active_project_id:
+                default_index = idx
+                break
+
+    selected_project_name = st.selectbox(
+        "Select Existing Project",
+        options=project_names,
+        index=default_index
+    )
+    
+    selected_id = project_options[selected_project_name]
+    if selected_id != st.session_state.active_project_id:
+        st.session_state.active_project_id = selected_id
+        st.session_state.active_job_id = None
+        st.session_state.chat_messages = []
+        st.rerun()
 
 
 # ── Fetch Active Project Details ─────────────────────────────────────────────
