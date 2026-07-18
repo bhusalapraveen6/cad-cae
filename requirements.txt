@@ -1,3 +1,13 @@
--r backend/requirements.txt
 streamlit>=1.35.0
 plotly>=5.22.0
+numpy
+trimesh
+scipy
+shapely
+sqlalchemy[asyncio]
+aiosqlite
+pydantic-settings
+pydantic
+structlog
+httpx
+anthropic
