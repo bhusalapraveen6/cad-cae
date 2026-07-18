@@ -80,7 +80,11 @@ async def run_static_structural(
     progress_callback: Optional[Callable] = None,
 ) -> StructuralResult:
     """Run CalculiX static structural analysis."""
-    if settings.mock_solver_mode:
+    import shutil
+    if settings.mock_solver_mode or not shutil.which(settings.ccx_binary):
+        if not settings.mock_solver_mode:
+            await _report(progress_callback, 5, "WARNING: CalculiX binary 'ccx' not found on system path.")
+            await _report(progress_callback, 10, "Falling back to emulation solver mode...")
         return await _mock_static_result(parameters, progress_callback)
 
     workspace = settings.solver_workspace / job_id
@@ -107,7 +111,11 @@ async def run_modal(
     progress_callback: Optional[Callable] = None,
 ) -> ModalResult:
     """Run CalculiX modal (frequency) analysis."""
-    if settings.mock_solver_mode:
+    import shutil
+    if settings.mock_solver_mode or not shutil.which(settings.ccx_binary):
+        if not settings.mock_solver_mode:
+            await _report(progress_callback, 5, "WARNING: CalculiX binary 'ccx' not found on system path.")
+            await _report(progress_callback, 10, "Falling back to emulation solver mode...")
         return await _mock_modal_result(parameters, progress_callback)
 
     workspace = settings.solver_workspace / job_id
@@ -134,7 +142,11 @@ async def run_buckling(
     progress_callback: Optional[Callable] = None,
 ) -> BucklingResult:
     """Run CalculiX buckling analysis."""
-    if settings.mock_solver_mode:
+    import shutil
+    if settings.mock_solver_mode or not shutil.which(settings.ccx_binary):
+        if not settings.mock_solver_mode:
+            await _report(progress_callback, 5, "WARNING: CalculiX binary 'ccx' not found on system path.")
+            await _report(progress_callback, 10, "Falling back to emulation solver mode...")
         return await _mock_buckling_result(parameters, progress_callback)
 
     workspace = settings.solver_workspace / job_id
@@ -500,20 +512,21 @@ async def _mock_static_result(
 
     stages = [
         (15, "Setting up non-linear elastoplastic model…"),
-        (30, "Increment 1: Solving load step (10% loaded)…"),
-        (50, "Increment 2: Plasticity iterations (40% loaded)…"),
-        (70, "Increment 3: Converging non-linear equilibrium (75% loaded)…"),
-        (85, "Increment 4: Solving final load step (100% loaded)…"),
-        (95, "Extracting elastoplastic stress/strain fields…"),
-        (100, "Non-linear structural analysis complete ✓"),
+        (15, "Setting up non-linear elastoplastic model..."),
+        (30, "Increment 1: Solving load step (10% loaded)..."),
+        (50, "Increment 2: Plasticity iterations (40% loaded)..."),
+        (70, "Increment 3: Converging non-linear equilibrium (75% loaded)..."),
+        (85, "Increment 4: Solving final load step (100% loaded)..."),
+        (95, "Extracting elastoplastic stress/strain fields..."),
+        (100, "Non-linear structural analysis complete [OK]"),
     ] if is_nonlinear else [
-        (15, "Setting up finite element model…"),
-        (30, "Assembling stiffness matrix…"),
-        (50, "Solving linear system (PCG)…"),
-        (70, "Computing stress and strain fields…"),
-        (85, "Computing von Mises equivalent stress…"),
-        (95, "Extracting result fields…"),
-        (100, "Static structural complete ✓"),
+        (15, "Setting up finite element model..."),
+        (30, "Assembling stiffness matrix..."),
+        (50, "Solving linear system (PCG)..."),
+        (70, "Computing stress and strain fields..."),
+        (85, "Computing von Mises equivalent stress..."),
+        (95, "Extracting result fields..."),
+        (100, "Static structural complete [OK]"),
     ]
     for pct, msg in stages:
         await _report(progress_callback, pct, msg)
@@ -567,10 +580,10 @@ async def _mock_modal_result(
     import asyncio
 
     stages = [
-        (20, "Assembling mass matrix…"),
-        (50, "Running Lanczos eigensolver…"),
-        (85, "Normalising mode shapes…"),
-        (100, "Modal analysis complete ✓"),
+        (20, "Assembling mass matrix..."),
+        (50, "Running Lanczos eigensolver..."),
+        (85, "Normalising mode shapes..."),
+        (100, "Modal analysis complete [OK]"),
     ]
     for pct, msg in stages:
         await _report(progress_callback, pct, msg)
@@ -605,10 +618,10 @@ async def _mock_buckling_result(
     import random
 
     stages = [
-        (20, "Assembling geometric stiffness matrix…"),
-        (50, "Solving buckling eigenvalue problem…"),
-        (85, "Extracting buckling modes…"),
-        (100, "Buckling analysis complete ✓"),
+        (20, "Assembling geometric stiffness matrix..."),
+        (50, "Solving buckling eigenvalue problem..."),
+        (85, "Extracting buckling modes..."),
+        (100, "Buckling analysis complete [OK]"),
     ]
     for pct, msg in stages:
         await _report(progress_callback, pct, msg)

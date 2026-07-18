@@ -35,6 +35,7 @@ interface AppState {
   setParameters: (type: AnalysisType, params: Record<string, unknown>) => void
   setSelectedMaterial: (m: Material | null) => void
   addJob: (job: Job) => void
+  setJobs: (jobs: Job[]) => void
   updateJob: (id: string, updates: Partial<Job>) => void
   setActiveJob: (job: Job | null) => void
   setChatOpen: (open: boolean) => void
@@ -83,6 +84,8 @@ export const useStore = create<AppState>((set, get) => ({
   setSelectedMaterial: (m) => set({ selectedMaterial: m }),
 
   addJob: (job) => set((state) => ({ jobs: [job, ...state.jobs], activeJob: job })),
+
+  setJobs: (jobs) => set({ jobs, activeJob: jobs[0] || null }),
 
   updateJob: (id, updates) => set((state) => ({
     jobs: state.jobs.map((j) => j.id === id ? { ...j, ...updates } : j),

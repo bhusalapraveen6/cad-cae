@@ -254,6 +254,7 @@ class ResultSummary(BaseModel):
     min_stress: Optional[float] = None        # MPa
     max_displacement: Optional[float] = None  # mm
     max_temperature: Optional[float] = None   # °C
+    min_temperature: Optional[float] = None   # °C
     min_safety_factor: Optional[float] = None
     natural_frequencies: Optional[List[float]] = None  # Hz
     buckling_factors: Optional[List[float]] = None     # load multipliers

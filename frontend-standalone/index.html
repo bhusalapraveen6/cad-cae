@@ -747,7 +747,7 @@
               <button class="tab-btn active" onclick="switchTab('summary')">Summary</button>
               <button class="tab-btn" onclick="switchTab('raw')">Raw Data</button>
             </div>
-            <div class="tab-panel active" id="tab-summary" id="results-table"></div>
+            <div class="tab-panel active" id="tab-summary"></div>
             <div class="tab-panel" id="tab-raw">
               <pre class="log-term" id="raw-json" style="white-space:pre-wrap;max-height:300px"></pre>
             </div>
@@ -1437,8 +1437,33 @@ async function sendChat() {
       });
       thinking.remove();
       if (r.ok) {
-        const d = await r.json();
-        addChatMsg(d.response || d.message || 'No response', 'bot');
+        // Backend returns SSE stream: data: {"token": "..."}\n\n
+        const botMsg = addChatMsg('', 'bot');
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fullText = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop(); // keep incomplete last line
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const payload = JSON.parse(line.slice(6));
+              if (payload.token) {
+                fullText += payload.token;
+                botMsg.textContent = fullText;
+                document.getElementById('chat-messages').scrollTop =
+                  document.getElementById('chat-messages').scrollHeight;
+              }
+              if (payload.done) break;
+            } catch(e) { /* ignore parse errors */ }
+          }
+        }
+        if (!fullText) botMsg.textContent = 'No response received.';
       } else {
         addChatMsg(fallbackChat(msg), 'bot');
       }

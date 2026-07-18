@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useStore } from '@/store'
-import { getMaterials, createJob, type AnalysisType, type Material } from '@/api/client'
+import { getMaterials, createJob, getProject, getSuggestions, type AnalysisType, type Material } from '@/api/client'
 
 const CATEGORY_ICONS: Record<string, string> = {
   structural: '⚡', thermal: '🔥', cfd: '💨', fatigue: '⚠',
@@ -39,10 +39,20 @@ const BC_TEMPLATES = {
 export default function AnalysisPage() {
   const navigate = useNavigate()
   const { projectId } = useParams()
-  const { suggestions, selectedAnalyses, toggleAnalysis, parameters, setParameters, selectedMaterial, setSelectedMaterial, addToast, addJob, setActiveJobId } = useStore()
+  const { suggestions, setSuggestions, selectedAnalyses, toggleAnalysis, parameters, setParameters, selectedMaterial, setSelectedMaterial, addToast, addJob, setActiveJobId, currentProject, setCurrentProject } = useStore()
   const [materials, setMaterials] = useState<Material[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [activeType, setActiveType] = useState<AnalysisType | null>(null)
+
+  // Load project details and AI suggestions on mount
+  useEffect(() => {
+    if (projectId) {
+      if (!currentProject || currentProject.id !== projectId) {
+        getProject(projectId).then(setCurrentProject).catch(console.error)
+      }
+      getSuggestions(projectId).then(data => setSuggestions(data.suggestions)).catch(console.error)
+    }
+  }, [projectId])
 
   useEffect(() => {
     getMaterials().then(mats => {

@@ -42,7 +42,7 @@ async def parse_cad_file(file_path: Path) -> GeometryData:
     suffix = file_path.suffix.lower()
     logger.info("Parsing CAD file", path=str(file_path), format=suffix, mock=settings.mock_cad_mode)
 
-    if suffix in (".stl", ".obj"):
+    if suffix in (".stl", ".obj", ".ply"):
         return await _parse_mesh_file(file_path, suffix)
     elif suffix in (".step", ".stp", ".iges", ".igs"):
         if settings.mock_cad_mode:

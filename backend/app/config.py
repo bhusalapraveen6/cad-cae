@@ -50,7 +50,12 @@ class Settings(BaseSettings):
     openfoam_script: str = "/opt/openfoam10/etc/bashrc"
     mock_solver_mode: bool = True   # Safe default for local dev
     mock_cad_mode: bool = True      # trimesh only (no pythonocc)
-    solver_workspace: Path = Path("/tmp/cae_jobs")
+
+    @property
+    def solver_workspace(self) -> Path:
+        """Cross-platform solver workspace directory."""
+        import tempfile
+        return Path(tempfile.gettempdir()) / "cae_jobs"
 
     # ── Chatbot ───────────────────────────────────────────────
     anthropic_api_key: str = ""

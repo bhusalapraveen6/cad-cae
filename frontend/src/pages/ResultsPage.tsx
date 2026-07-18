@@ -266,7 +266,12 @@ export default function ResultsPage() {
                 />
               )}
               {summary.max_temperature && (
-                <Colorbar min={20} max={summary.max_temperature} unit="°C" label="Temperature" />
+                <Colorbar
+                  min={summary.min_temperature ?? 20}
+                  max={summary.max_temperature}
+                  unit="°C"
+                  label="Temperature"
+                />
               )}
             </div>
           </div>
@@ -344,7 +349,7 @@ export default function ResultsPage() {
                   )}
 
                   {/* Safety assessment */}
-                  {summary.min_safety_factor !== undefined && (
+                  {summary.min_safety_factor !== undefined && summary.min_safety_factor !== null && (
                     <div style={{
                       background: `${safetyColor}10`, border: `1px solid ${safetyColor}30`,
                       borderRadius: 'var(--radius-md)', padding: 'var(--space-md)', marginBottom: 'var(--space-md)',
@@ -362,7 +367,6 @@ export default function ResultsPage() {
                     </div>
                   )}
 
-                  {/* Engineering disclaimer */}
                   <div style={{
                     background: 'rgba(255,234,0,0.05)', border: '1px solid rgba(255,234,0,0.15)',
                     borderRadius: 'var(--radius-md)', padding: 'var(--space-sm)', fontSize: 11,

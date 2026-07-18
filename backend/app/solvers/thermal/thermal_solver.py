@@ -37,7 +37,11 @@ async def run_thermal(
     progress_callback: Optional[Callable] = None,
 ) -> ThermalResult:
     """Run steady-state or transient CalculiX thermal analysis."""
-    if settings.mock_solver_mode:
+    import shutil
+    if settings.mock_solver_mode or not shutil.which(settings.ccx_binary):
+        if not settings.mock_solver_mode:
+            await _report_thermal(progress_callback, 5, "WARNING: CalculiX binary 'ccx' not found on system path.")
+            await _report_thermal(progress_callback, 10, "Falling back to emulation solver mode...")
         return await _mock_thermal(parameters, progress_callback)
 
     if not mesh_file:
@@ -206,12 +210,12 @@ async def _mock_thermal(params: Dict, cb: Optional[Callable]) -> ThermalResult:
         (70, "Solving load step 3: t=0.8s…"),
         (85, "Converging temperature distribution at t=1.0s…"),
         (95, "Extracting nodal temperatures…"),
-        (100, "Thermal transient analysis complete ✓")
+        (100, "Thermal transient analysis complete [OK]")
     ] if not steady else [
-        (20, "Setting up thermal model…"),
-        (50, "Assembling conductance matrix…"),
-        (75, "Solving temperature field…"),
-        (100, "Thermal analysis complete ✓")
+        (20, "Setting up thermal model..."),
+        (50, "Assembling conductance matrix..."),
+        (75, "Solving temperature field..."),
+        (100, "Thermal analysis complete [OK]")
     ]
     for pct, msg in stages:
         await _report_thermal(cb, pct, msg)
@@ -220,19 +224,33 @@ async def _mock_thermal(params: Dict, cb: Optional[Callable]) -> ThermalResult:
     bcs = params.get("boundary_conditions", [])
     conv = next((b for b in bcs if b.get("type") == "convection"), {})
     ambient = conv.get("ambient_temperature", 25.0)
-    heat = conv.get("film_coefficient", 10.0)
-    max_temp = ambient + 1000 / (heat * 0.01)
+    h = conv.get("film_coefficient", 10.0)  # W/(m²·K)
+
+    # Physics-based estimate: T_surface = T_ambient + Q / (h * A)
+    # Assume a small body with 10 W internal heat dissipation and A=0.01 m²
+    Q = 10.0   # watts (assumed internal heat generation)
+    A = 0.01   # m² (reference convective area)
+    delta_T = Q / (h * A)  # °C rise above ambient
+    max_temp = round(ambient + delta_T, 2)
+    min_temp_surface = round(ambient + delta_T * 0.3, 2)  # far from heat source
 
     if not steady:
+        # Transient: temperature has not yet reached steady-state
         init_temp = params.get("initial_temperature", 20.0)
-        max_temp = init_temp + (max_temp - init_temp) * 0.78
+        # Simulate 78% of the way to steady-state
+        max_temp = round(init_temp + (max_temp - init_temp) * 0.78, 2)
+        min_temp_surface = round(init_temp + (min_temp_surface - init_temp) * 0.78, 2)
 
     n = 80
     x = np.linspace(0, 1, n)
     temp_field = (max_temp - ambient) * np.exp(-3 * x) + ambient
+    # Ensure min is at least ambient
+    min_temp_field = max(float(temp_field.min()), ambient)
 
-    r = ThermalResult(max_temperature=round(float(temp_field.max()), 2),
-                      min_temperature=round(float(temp_field.min()), 2),
-                      temperature_field=temp_field.astype(np.float32))
+    r = ThermalResult(
+        max_temperature=round(float(temp_field.max()), 2),
+        min_temperature=round(min_temp_field, 2),
+        temperature_field=temp_field.astype(np.float32),
+    )
     r.result_data = r.to_dict()
     return r

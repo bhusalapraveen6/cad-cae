@@ -4,7 +4,7 @@ import { useDropzone } from 'react-dropzone'
 import { uploadCADFile, type GeometryFeatures, type AnalysisSuggestion } from '@/api/client'
 import { useStore } from '@/store'
 
-const ALLOWED_EXTS = ['.step', '.stp', '.iges', '.igs', '.stl', '.obj']
+const ALLOWED_EXTS = ['.step', '.stp', '.iges', '.igs', '.stl', '.obj', '.ply']
 
 function FeatureChip({ label, detected }: { label: string; detected: boolean }) {
   return (
@@ -46,6 +46,7 @@ export default function UploadPage() {
       'model/iges': ['.iges', '.igs'],
       'model/stl': ['.stl'],
       'model/obj': ['.obj'],
+      'model/ply': ['.ply'],
     },
   })
 
@@ -98,7 +99,7 @@ export default function UploadPage() {
           <div className="section-label">Step 1 of 4</div>
           <h2 className="section-title">Upload Your CAD File</h2>
           <p className="section-desc">
-            Supported formats: STEP, IGES, STL, OBJ. Geometry features are extracted automatically.
+            Supported formats: STEP, IGES, STL, OBJ, PLY. Geometry features are extracted automatically.
           </p>
         </div>
 

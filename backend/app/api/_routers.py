@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import get_db, get_db_context
 from app.models import db_models as M
 from app.models import schemas as S
 
@@ -278,6 +278,7 @@ async def get_results(job_id: str, db: AsyncSession = Depends(get_db)):
             min_stress=r.min_stress,
             max_displacement=r.max_displacement,
             max_temperature=r.max_temperature,
+            min_temperature=r.result_data.get("min_temperature_c") if r.result_data else None,
             min_safety_factor=r.min_safety_factor,
             natural_frequencies=r.natural_frequencies,
             buckling_factors=r.buckling_factors,
@@ -351,21 +352,35 @@ async def chat(body: S.ChatMessageRequest, db: AsyncSession = Depends(get_db)):
     # Build context for Claude
     context = await _build_chat_context(body.project_id, body.job_id, db)
 
+    # Capture values needed by the generator (don't capture `db` — FastAPI closes
+    # the dependency session when this function returns, before streaming finishes)
+    project_id = body.project_id
+    job_id = body.job_id
+    message = body.message
+
     async def sse_generator():
         full_response = ""
-        async for token in stream_chat_response(body.message, context):
-            full_response += token
-            yield f"data: {json.dumps({'token': token})}\n\n"
+        try:
+            async for token in stream_chat_response(message, context):
+                full_response += token
+                yield f"data: {json.dumps({'token': token})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
-        # Save assistant response
-        asst_msg = M.ChatMessage(
-            project_id=body.project_id,
-            job_id=body.job_id,
-            role="assistant",
-            content=full_response,
-        )
-        db.add(asst_msg)
-        await db.commit()
+        # Save assistant response using a fresh session (FastAPI dep already closed)
+        try:
+            async with get_db_context() as save_db:
+                asst_msg = M.ChatMessage(
+                    project_id=project_id,
+                    job_id=job_id,
+                    role="assistant",
+                    content=full_response,
+                )
+                save_db.add(asst_msg)
+                await save_db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to save assistant message: {str(e)}")
+
         yield f"data: {json.dumps({'done': True})}\n\n"
 
     return StreamingResponse(sse_generator(), media_type="text/event-stream")

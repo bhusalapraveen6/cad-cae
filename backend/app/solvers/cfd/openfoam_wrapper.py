@@ -38,7 +38,20 @@ async def run_cfd(
     analysis_type: str = "cfd_internal",
 ) -> CFDResult:
     """Run OpenFOAM CFD internal or external flow analysis."""
-    if settings.mock_solver_mode:
+    import os
+    from pathlib import Path
+    is_windows = os.name == "nt"
+    openfoam_missing = not Path(settings.openfoam_script).exists()
+    
+    if settings.mock_solver_mode or is_windows or openfoam_missing:
+        if not settings.mock_solver_mode:
+            if progress_callback:
+                if asyncio.iscoroutinefunction(progress_callback):
+                    await progress_callback(5, "WARNING: OpenFOAM script or environment not found on system path.")
+                    await progress_callback(10, "Falling back to emulation CFD solver mode...")
+                else:
+                    progress_callback(5, "WARNING: OpenFOAM script or environment not found on system path.")
+                    progress_callback(10, "Falling back to emulation CFD solver mode...")
         return await _mock_cfd(parameters, progress_callback, is_external=(analysis_type == "cfd_external"))
     raise NotImplementedError("OpenFOAM CFD requires Docker environment")
 
@@ -50,14 +63,14 @@ async def _mock_cfd(params: Dict, cb: Optional[Callable], is_external: bool = Fa
         (45, "Setting free-stream boundary conditions (U_inf)…"),
         (70, "Running simpleFoam flow solver (converging)…"),
         (90, "Integrating surface pressure for drag/lift…"),
-        (100, "CFD external flow analysis complete ✓"),
+        (100, "CFD external flow analysis complete [OK]"),
     ] if is_external else [
-        (10, "Generating OpenFOAM case directory…"),
-        (25, "Setting boundary conditions (0/ folder)…"),
-        (40, "Running blockMesh / snappyHexMesh…"),
-        (60, "Running simpleFoam (500 iterations)…"),
-        (80, "Post-processing velocity/pressure fields…"),
-        (100, "CFD analysis complete ✓"),
+        (10, "Generating OpenFOAM case directory..."),
+        (25, "Setting boundary conditions (0/ folder)..."),
+        (40, "Running blockMesh / snappyHexMesh..."),
+        (60, "Running simpleFoam (500 iterations)..."),
+        (80, "Post-processing velocity/pressure fields..."),
+        (100, "CFD analysis complete [OK]"),
     ]
     for pct, msg in stages:
         if cb:

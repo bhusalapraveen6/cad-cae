@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useStore } from '@/store'
-import { subscribeJobProgress, getJob, type Job, type JobStatus } from '@/api/client'
+import { subscribeJobProgress, getJob, getProject, getProjectJobs, type Job, type JobStatus } from '@/api/client'
 
 const STATUS_ICONS: Record<JobStatus, string> = {
   pending: '○', meshing: '◌', solving: '◉', parsing: '◑',
@@ -79,8 +79,18 @@ function JobCard({ job }: { job: Job }) {
 export default function SolverPage() {
   const { projectId } = useParams()
   const navigate = useNavigate()
-  const { jobs, updateJob, addToast, setActiveJobId } = useStore()
+  const { jobs, setJobs, updateJob, addToast, setActiveJobId, currentProject, setCurrentProject } = useStore()
   const unsubscribers = useRef<Map<string, () => void>>(new Map())
+
+  // Load project details and jobs on mount
+  useEffect(() => {
+    if (projectId) {
+      if (!currentProject || currentProject.id !== projectId) {
+        getProject(projectId).then(setCurrentProject).catch(console.error)
+      }
+      getProjectJobs(projectId).then(setJobs).catch(console.error)
+    }
+  }, [projectId])
 
   // Subscribe to SSE for each active job
   useEffect(() => {
@@ -149,7 +159,7 @@ export default function SolverPage() {
           </h2>
           <p className="section-desc">
             {hasRunning
-              ? 'Celery workers are processing your jobs in the background. Results update live.'
+              ? 'Jobs are processing in the background. Results update live via SSE.'
               : hasCompleted
               ? 'All analyses completed successfully. View your interactive results.'
               : 'No jobs running. Go back to configure and start analyses.'}

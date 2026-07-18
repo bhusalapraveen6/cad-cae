@@ -216,8 +216,20 @@ backend_dir = str(Path(__file__).resolve().parent.parent)
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
+import os
+import sys
 import time
 from contextlib import asynccontextmanager
+
+# ── Windows UTF-8 fix ─────────────────────────────────────────────────────────
+# Ensure stdout/stderr use UTF-8 so Unicode chars in log messages (✓, …, etc.)
+# don't cause UnicodeEncodeError on Windows with cp1252 default encoding.
+if sys.platform == "win32":
+    os.environ.setdefault("PYTHONUTF8", "1")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore
 
 import structlog
 from fastapi import FastAPI, Request

@@ -84,6 +84,7 @@ export interface ResultSummary {
   min_stress?: number
   max_displacement?: number
   max_temperature?: number
+  min_temperature?: number
   min_safety_factor?: number
   natural_frequencies?: number[]
   buckling_factors?: number[]
@@ -168,6 +169,11 @@ export const createJob = async (
 
 export const getJob = async (jobId: string): Promise<Job> => {
   const { data } = await api.get(`/jobs/${jobId}`)
+  return data
+}
+
+export const getProjectJobs = async (projectId: string): Promise<Job[]> => {
+  const { data } = await api.get(`/projects/${projectId}/jobs`)
   return data
 }
 
