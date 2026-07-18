@@ -170,6 +170,8 @@ if "active_job_id" not in st.session_state:
     st.session_state.active_job_id = None
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = "📐 Geometry Analysis"
 
 # ── API Client Implementation ────────────────────────────────────────────────
 def api_request(method, endpoint, **kwargs):
@@ -692,15 +694,23 @@ else:
     st.write("Upload a CAD model to automatically run feature detection, obtain simulation suggestives, run multiphysics solvers, and check results.")
 
 # ── Set Up Main Tabs ──────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📐 Geometry Analysis", 
-    "💻 Simulation Setup", 
-    "📊 3D Viewer & Results", 
+nav_cols = st.columns(4)
+tab_titles = [
+    "📐 Geometry Analysis",
+    "💻 Simulation Setup",
+    "📊 3D Viewer & Results",
     "🤖 AI Assistant Chat"
-])
+]
+
+for idx, title in enumerate(tab_titles):
+    with nav_cols[idx]:
+        if st.button(title, use_container_width=True, type="primary" if st.session_state.active_tab == title else "secondary"):
+            st.session_state.active_tab = title
+            st.rerun()
+st.write("---")
 
 # 🛠 Tab 1: Geometry Feature Extraction & Suggestions
-with tab1:
+if st.session_state.active_tab == "📐 Geometry Analysis":
     col1, col2 = st.columns([1, 1])
     
     with col1:
@@ -726,6 +736,7 @@ with tab1:
                         project_id = local_upload_cad(file_bytes, filename, proj_name_input, use_case_input)
                         st.session_state.active_project_id = project_id
                         st.success("CAD parsed and loaded successfully in Standalone mode!")
+                        st.session_state.active_tab = "💻 Simulation Setup"
                         st.rerun()
                     elif st.session_state.op_mode == "API Client":
                         files = {"file": (filename, file_bytes)}
@@ -734,6 +745,7 @@ with tab1:
                         if res:
                             st.session_state.active_project_id = res["project_id"]
                             st.success("CAD uploaded successfully to API server!")
+                            st.session_state.active_tab = "💻 Simulation Setup"
                             st.rerun()
 
         # Display geometry attributes if loaded
@@ -829,7 +841,7 @@ with tab1:
 
 
 # 💻 Tab 2: Solver Parameter Configurations & Job submission
-with tab2:
+elif st.session_state.active_tab == "💻 Simulation Setup":
     if not active_project:
         st.warning("Please select or upload a project first.")
     else:
@@ -970,6 +982,8 @@ with tab2:
                     if job_info and job_info.get("status") == "completed":
                         st.session_state.active_job_id = job_id
                         st.success("Simulation finished successfully!")
+                        st.session_state.active_tab = "📊 3D Viewer & Results"
+                        st.rerun()
                     else:
                         st.error(f"Simulation failed. Error: {job_info.get('error_message') if job_info else 'Unknown'}")
                         
@@ -996,12 +1010,14 @@ with tab2:
                         if job_info and job_info.get("status") == "completed":
                             st.session_state.active_job_id = job_id
                             st.success("Simulation completed on server!")
+                            st.session_state.active_tab = "📊 3D Viewer & Results"
+                            st.rerun()
                         else:
                             st.error("Simulation run timed out or failed on the API server.")
 
 
 # 📊 Tab 3: Simulation Results, Contour plots and PDF reports
-with tab3:
+elif st.session_state.active_tab == "📊 3D Viewer & Results":
     # Let user select from the history of completed jobs for this project
     jobs = []
     if active_project:
@@ -1130,7 +1146,7 @@ with tab3:
 
 
 # 🤖 Tab 4: AI chatbot Grounded in CAE project context
-with tab4:
+elif st.session_state.active_tab == "🤖 AI Assistant Chat":
     if not active_project:
         st.warning("Please select or upload a project first.")
     else:
