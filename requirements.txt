@@ -11,3 +11,5 @@ pydantic
 structlog
 httpx
 anthropic
+reportlab
+python-docx

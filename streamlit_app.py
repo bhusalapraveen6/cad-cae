@@ -499,6 +499,109 @@ def get_plotly_mesh(vertices, faces, analysis_type=None, result_data=None, field
     return fig
 
 
+def generate_mock_pdf(project_name, analysis_type, results):
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+        import io
+        
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
+        story = []
+        styles = getSampleStyleSheet()
+        
+        title_style = ParagraphStyle(
+            name='TitleStyle',
+            parent=styles['Heading1'],
+            textColor=colors.HexColor('#002d62'),
+            spaceAfter=20
+        )
+        
+        story.append(Paragraph(f"CAD-CAE Simulation Analysis Report", title_style))
+        story.append(Paragraph(f"<b>Project Name:</b> {project_name}", styles['Normal']))
+        story.append(Paragraph(f"<b>Simulation Type:</b> {analysis_type.replace('_', ' ').title()}", styles['Normal']))
+        story.append(Spacer(1, 12))
+        
+        story.append(Paragraph("<b>Simulation Scalar Summary:</b>", styles['Heading3']))
+        story.append(Spacer(1, 6))
+        
+        data = [["Metric", "Value", "Unit"]]
+        if results.get("max_stress"):
+            data.append(["Max von Mises Stress", f"{results.get('max_stress'):,.2f}", "MPa"])
+        if results.get("max_displacement"):
+            data.append(["Max Displacement", f"{results.get('max_displacement'):,.4f}", "mm"])
+        if results.get("min_safety_factor"):
+            data.append(["Min Safety Factor", f"{results.get('min_safety_factor'):,.2f}", "-"])
+        if results.get("max_temperature"):
+            data.append(["Max Temperature", f"{results.get('max_temperature'):,.1f}", "°C"])
+            
+        t = Table(data, colWidths=[200, 100, 100])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2979ff')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+            ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('BOTTOMPADDING', (0,0), (-1,0), 8),
+            ('BACKGROUND', (0,1), (-1,-1), colors.HexColor('#f5f7fa')),
+            ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#d0d5dd')),
+            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#f9fafb')])
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 20))
+        story.append(Paragraph("Report generated automatically via CAD-CAE dashboard.", styles['Italic']))
+        
+        doc.build(story)
+        buffer.seek(0)
+        return buffer.getvalue()
+    except Exception as e:
+        return f"CAD-CAE Simulation Analysis Report\nProject: {project_name}\nType: {analysis_type}\nError generating ReportLab PDF: {e}".encode()
+
+
+def generate_mock_docx(project_name, analysis_type, results):
+    try:
+        from docx import Document
+        import io
+        
+        doc = Document()
+        doc.add_heading("CAD-CAE Simulation Analysis Report", level=0)
+        
+        doc.add_paragraph(f"Project Name: {project_name}")
+        doc.add_paragraph(f"Simulation Type: {analysis_type.replace('_', ' ').title()}")
+        
+        doc.add_heading("Simulation Summary Metrics", level=2)
+        table = doc.add_table(rows=1, cols=3)
+        hdr_cells = table.rows[0].cells
+        hdr_cells[0].text = "Metric"
+        hdr_cells[1].text = "Value"
+        hdr_cells[2].text = "Unit"
+        
+        def add_row(m, v, u):
+            row_cells = table.add_row().cells
+            row_cells[0].text = str(m)
+            row_cells[1].text = str(v)
+            row_cells[2].text = str(u)
+            
+        if results.get("max_stress"):
+            add_row("Max von Mises Stress", f"{results.get('max_stress'):,.2f}", "MPa")
+        if results.get("max_displacement"):
+            add_row("Max Displacement", f"{results.get('max_displacement'):,.4f}", "mm")
+        if results.get("min_safety_factor"):
+            add_row("Min Safety Factor", f"{results.get('min_safety_factor'):,.2f}", "-")
+        if results.get("max_temperature"):
+            add_row("Max Temperature", f"{results.get('max_temperature'):,.1f}", "°C")
+            
+        doc.add_paragraph("\nReport generated automatically via CAD-CAE dashboard.")
+        
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        return buffer.getvalue()
+    except Exception as e:
+        return f"CAD-CAE Simulation Analysis Report\nProject: {project_name}\nType: {analysis_type}\nError generating DOCX: {e}".encode()
+
+
 # ── Sidebar Configurations ────────────────────────────────────────────────────
 with st.sidebar:
     st.image("https://img.icons8.com/nolan/96/artificial-intelligence.png", width=64)
@@ -992,10 +1095,28 @@ with tab3:
             st.write("---")
             st.subheader("📄 Engineering Report Generation")
             col_pdf, col_docx = st.columns(2)
+            
+            project_name = active_project.get("name", "Unknown")
+            analysis_type = active_job.get("analysis_type", "static_structural")
+            
+            # Generate report bytes
+            pdf_data = generate_mock_pdf(project_name, analysis_type, res)
+            docx_data = generate_mock_docx(project_name, analysis_type, res)
+            
             with col_pdf:
-                st.button("📥 Download PDF Analysis Report (Mocked)")
+                st.download_button(
+                    label="📥 Download PDF Analysis Report",
+                    data=pdf_data,
+                    file_name=f"{project_name.lower().replace(' ', '_')}_report.pdf",
+                    mime="application/pdf"
+                )
             with col_docx:
-                st.button("📥 Download Word DOCX Analysis Report (Mocked)")
+                st.download_button(
+                    label="📥 Download Word DOCX Analysis Report",
+                    data=docx_data,
+                    file_name=f"{project_name.lower().replace(' ', '_')}_report.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
 
 
 # 🤖 Tab 4: AI chatbot Grounded in CAE project context
