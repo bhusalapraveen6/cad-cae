@@ -204,11 +204,27 @@ db_ready = setup_database()
 
 # ── Session State Setup ───────────────────────────────────────────────────────
 if "user" not in st.session_state:
-    st.session_state.user = None
+    st.session_state.user = "default_user"
 if "user_id" not in st.session_state:
-    st.session_state.user_id = None
+    st.session_state.user_id = "default_user_id"
 if "token" not in st.session_state:
     st.session_state.token = None
+
+# Auto-login default_user for backend database scoping
+if st.session_state.user == "default_user" and st.session_state.token is None:
+    try:
+        import httpx
+        # Attempt signup
+        httpx.post("http://127.0.0.1:8000/api/auth/signup", json={"username": "default_user", "password": "DefaultPassword123!"}, timeout=5.0)
+        # Attempt login
+        res = httpx.post("http://127.0.0.1:8000/api/auth/login", json={"username": "default_user", "password": "DefaultPassword123!"}, timeout=5.0)
+        if res.status_code == 200:
+            data = res.json()
+            st.session_state.token = data.get("token")
+            st.session_state.user_id = data.get("user_id")
+    except Exception:
+        pass
+
 if "op_mode" not in st.session_state:
     st.session_state.op_mode = "API Client"
 if "api_url" not in st.session_state:
@@ -801,9 +817,9 @@ def generate_mock_docx(project_name, analysis_type, results):
 
 
 # Enforce login screen in main content area when not logged in
-if st.session_state.get("user") is None:
-    st.title("Automated CAD-to-CAE Platform")
-    st.info("👋 Please log in or sign up from the sidebar to access your projects and files.")
+# if st.session_state.get("user") is None:
+#     st.title("Automated CAD-to-CAE Platform")
+#     st.info("👋 Please log in or sign up from the sidebar to access your projects and files.")
 
 
 # ── Sidebar Configurations ────────────────────────────────────────────────────
@@ -812,177 +828,178 @@ with st.sidebar:
     st.title("CAD-CAE Dashboard")
     st.write("---")
 
-    # User Authentication UI
-    if st.session_state.user is None:
-        st.subheader("🔐 User Workspace Login")
-        auth_action = st.radio("Choose Action", ["Login", "Sign Up"], horizontal=True)
-        username = st.text_input("Username", key="auth_username")
-        password = st.text_input("Password", type="password", key="auth_password")
+    # User Authentication UI Commented Out
+    # if st.session_state.user is None:
+    #     st.subheader("🔐 User Workspace Login")
+    #     auth_action = st.radio("Choose Action", ["Login", "Sign Up"], horizontal=True)
+    #     username = st.text_input("Username", key="auth_username")
+    #     password = st.text_input("Password", type="password", key="auth_password")
+    # 
+    #     if st.button("Submit"):
+    #         if not username or not password:
+    #             st.error("Please enter both username and password")
+    #         else:
+    #             if auth_action == "Login":
+    #                 if st.session_state.op_mode == "Standalone":
+    #                     uid = check_standalone_login(username, password)
+    #                     if uid:
+    #                         st.session_state.user = username
+    #                         st.session_state.user_id = uid
+    #                         st.success(f"Logged in as {username}")
+    #                         st.rerun()
+    #                     else:
+    #                         st.error("Invalid username or password")
+    #                 else:
+    #                     tok, uid = check_api_login(username, password)
+    #                     if tok:
+    #                         st.session_state.user = username
+    #                         st.session_state.user_id = uid
+    #                         st.session_state.token = tok
+    #                         st.success(f"Logged in as {username}")
+    #                         st.rerun()
+    #                     else:
+    #                         st.error("Invalid username or password")
+    #             else:  # Sign Up
+    #                 if st.session_state.op_mode == "Standalone":
+    #                     uid = create_standalone_user(username, password)
+    #                     if uid == "exists":
+    #                         st.error("Username already exists")
+    #                     elif uid:
+    #                         st.session_state.user = username
+    #                         st.session_state.user_id = uid
+    #                         st.success(f"Registered and logged in as {username}")
+    #                         st.rerun()
+    #                     else:
+    #                         st.error("Failed to create user")
+    #                 else:
+    #                     res = create_api_user(username, password)
+    #                     if res == "exists":
+    #                         st.error("Username already exists")
+    #                     elif res:
+    #                         # Log them in automatically
+    #                         tok, uid = check_api_login(username, password)
+    #                         if tok:
+    #                             st.session_state.user = username
+    #                             st.session_state.user_id = uid
+    #                             st.session_state.token = tok
+    #                             st.success(f"Registered and logged in as {username}")
+    #                             st.rerun()
+    #                     else:
+    #                         st.error("Failed to create user")
+    #     st.write("---")
+    #     st.subheader("🔑 Or Sign-in via OAuth")
+    #     oauth_provider = st.selectbox("Select Provider", ["Google", "GitHub", "Microsoft"])
+    #     
+    #     provider_key = oauth_provider.lower()
+    #     callback_url = f"{st.session_state.api_url}/auth/callback"
+    #     
+    #     import httpx
+    #     try:
+    #         res = httpx.get(f"{st.session_state.api_url}/auth/{provider_key}", params={"redirect_uri": callback_url})
+    #         if res.status_code == 200:
+    #             auth_url = res.json().get("url")
+    #             st.markdown(f"[🔗 Complete Sign-In with {oauth_provider}]({auth_url})")
+    #     except Exception:
+    #         pass
+    # 
+    #     if st.button(f"Mock {oauth_provider} Callback (Instant Login)"):
+    #         try:
+    #             cb_res = httpx.post(f"{st.session_state.api_url}/auth/callback", json={
+    #                 "provider": provider_key,
+    #                 "code": f"mock_{provider_key}_code_123"
+    #             })
+    #             if cb_res.status_code == 200:
+    #                 data = cb_res.json()
+    #                 st.session_state.user = data["username"]
+    #                 st.session_state.user_id = data["user_id"]
+    #                 st.session_state.token = data["token"]
+    #                 st.success(f"Logged in via OAuth as {data['username']}")
+    #                 st.rerun()
+    #             else:
+    #                 st.error("OAuth callback exchange failed")
+    #         except Exception as e:
+    #             st.error(f"OAuth connection failed: {e}")
+    #     
+    #     # Stop executing the rest of the dashboard
+    #     st.stop()
+    # 
+    # else:
+    #     st.write(f"👤 Logged in as: **{st.session_state.user}**")
+    #     if st.button("Log Out"):
+    #         st.session_state.user = None
+    #         st.session_state.user_id = None
+    #         st.session_state.token = None
+    #         st.session_state.active_project_id = None
+    #         st.session_state.active_job_id = None
+    #         st.session_state.chat_messages = []
+    #         st.rerun()
+    #     st.write("---")
 
-        if st.button("Submit"):
-            if not username or not password:
-                st.error("Please enter both username and password")
-            else:
-                if auth_action == "Login":
-                    if st.session_state.op_mode == "Standalone":
-                        uid = check_standalone_login(username, password)
-                        if uid:
-                            st.session_state.user = username
-                            st.session_state.user_id = uid
-                            st.success(f"Logged in as {username}")
-                            st.rerun()
-                        else:
-                            st.error("Invalid username or password")
-                    else:
-                        tok, uid = check_api_login(username, password)
-                        if tok:
-                            st.session_state.user = username
-                            st.session_state.user_id = uid
-                            st.session_state.token = tok
-                            st.success(f"Logged in as {username}")
-                            st.rerun()
-                        else:
-                            st.error("Invalid username or password")
-                else:  # Sign Up
-                    if st.session_state.op_mode == "Standalone":
-                        uid = create_standalone_user(username, password)
-                        if uid == "exists":
-                            st.error("Username already exists")
-                        elif uid:
-                            st.session_state.user = username
-                            st.session_state.user_id = uid
-                            st.success(f"Registered and logged in as {username}")
-                            st.rerun()
-                        else:
-                            st.error("Failed to create user")
-                    else:
-                        res = create_api_user(username, password)
-                        if res == "exists":
-                            st.error("Username already exists")
-                        elif res:
-                            # Log them in automatically
-                            tok, uid = check_api_login(username, password)
-                            if tok:
-                                st.session_state.user = username
-                                st.session_state.user_id = uid
-                                st.session_state.token = tok
-                                st.success(f"Registered and logged in as {username}")
-                                st.rerun()
-                        else:
-                            st.error("Failed to create user")
-        st.write("---")
-        st.subheader("🔑 Or Sign-in via OAuth")
-        oauth_provider = st.selectbox("Select Provider", ["Google", "GitHub", "Microsoft"])
-        
-        provider_key = oauth_provider.lower()
-        callback_url = f"{st.session_state.api_url}/auth/callback"
-        
-        import httpx
+    if st.button("🆕 Start New Project"):
+        st.session_state.active_project_id = None
+        st.session_state.active_job_id = None
+        st.session_state.chat_messages = []
+        st.session_state.active_tab = "📐 Geometry Analysis"
+        st.rerun()
+
+    st.write("---")
+    st.subheader("⚙️ Chatbot Settings")
+    
+    has_key = False
+    masked_key = ""
+    if st.session_state.op_mode == "API Client" and st.session_state.token:
+        headers = {"Authorization": f"Bearer {st.session_state.token}"}
         try:
-            res = httpx.get(f"{st.session_state.api_url}/auth/{provider_key}", params={"redirect_uri": callback_url})
+            res = httpx.get(f"{st.session_state.api_url}/auth/api-key", headers=headers)
             if res.status_code == 200:
-                auth_url = res.json().get("url")
-                st.markdown(f"[🔗 Complete Sign-In with {oauth_provider}]({auth_url})")
+                data = res.json()
+                has_key = data.get("has_key", False)
+                masked_key = data.get("masked_key", "")
         except Exception:
             pass
 
-        if st.button(f"Mock {oauth_provider} Callback (Instant Login)"):
-            try:
-                cb_res = httpx.post(f"{st.session_state.api_url}/auth/callback", json={
-                    "provider": provider_key,
-                    "code": f"mock_{provider_key}_code_123"
-                })
-                if cb_res.status_code == 200:
-                    data = cb_res.json()
-                    st.session_state.user = data["username"]
-                    st.session_state.user_id = data["user_id"]
-                    st.session_state.token = data["token"]
-                    st.success(f"Logged in via OAuth as {data['username']}")
-                    st.rerun()
-                else:
-                    st.error("OAuth callback exchange failed")
-            except Exception as e:
-                st.error(f"OAuth connection failed: {e}")
-        
-        # Stop executing the rest of the dashboard
-        st.stop()
-
+    if has_key:
+        st.success(f"Registered Key: `{masked_key}`")
+        if st.button("🗑️ Delete API Key"):
+            if st.session_state.op_mode == "API Client" and st.session_state.token:
+                headers = {"Authorization": f"Bearer {st.session_state.token}"}
+                try:
+                    res = httpx.delete(f"{st.session_state.api_url}/auth/api-key", headers=headers)
+                    if res.status_code == 200:
+                        st.success("API key deleted!")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to delete key: {e}")
     else:
-        st.write(f"👤 Logged in as: **{st.session_state.user}**")
-        if st.button("Log Out"):
-            st.session_state.user = None
-            st.session_state.user_id = None
-            st.session_state.token = None
-            st.session_state.active_project_id = None
-            st.session_state.active_job_id = None
-            st.session_state.chat_messages = []
-            st.rerun()
-        st.write("---")
-
-        if st.button("🆕 Start New Project"):
-            st.session_state.active_project_id = None
-            st.session_state.active_job_id = None
-            st.session_state.chat_messages = []
-            st.session_state.active_tab = "📐 Geometry Analysis"
-            st.rerun()
-
-        st.write("---")
-        st.subheader("⚙️ Chatbot Settings")
-        
-        has_key = False
-        masked_key = ""
-        if st.session_state.op_mode == "API Client" and st.session_state.token:
-            headers = {"Authorization": f"Bearer {st.session_state.token}"}
-            try:
-                res = httpx.get(f"{st.session_state.api_url}/auth/api-key", headers=headers)
-                if res.status_code == 200:
-                    data = res.json()
-                    has_key = data.get("has_key", False)
-                    masked_key = data.get("masked_key", "")
-            except Exception:
-                pass
-
-        if has_key:
-            st.success(f"Registered Key: `{masked_key}`")
-            if st.button("🗑️ Delete API Key"):
+        new_key = st.text_input("Enter Gemini API Key", type="password")
+        if st.button("💾 Save API Key"):
+            if new_key:
                 if st.session_state.op_mode == "API Client" and st.session_state.token:
                     headers = {"Authorization": f"Bearer {st.session_state.token}"}
                     try:
-                        res = httpx.delete(f"{st.session_state.api_url}/auth/api-key", headers=headers)
+                        res = httpx.post(f"{st.session_state.api_url}/auth/api-key", json={"gemini_api_key": new_key}, headers=headers)
                         if res.status_code == 200:
-                            st.success("API key deleted!")
+                            st.success("API key saved securely!")
                             st.rerun()
+                        else:
+                            st.error("Failed to save API key.")
                     except Exception as e:
-                        st.error(f"Failed to delete key: {e}")
-        else:
-            new_key = st.text_input("Enter Gemini API Key", type="password")
-            if st.button("💾 Save API Key"):
-                if new_key:
-                    if st.session_state.op_mode == "API Client" and st.session_state.token:
-                        headers = {"Authorization": f"Bearer {st.session_state.token}"}
-                        try:
-                            res = httpx.post(f"{st.session_state.api_url}/auth/api-key", json={"gemini_api_key": new_key}, headers=headers)
-                            if res.status_code == 200:
-                                st.success("API key saved securely!")
-                                st.rerun()
-                            else:
-                                st.error("Failed to save API key.")
-                        except Exception as e:
-                            st.error(f"Failed to save key: {e}")
-                else:
-                    st.warning("Please enter a key first.")
+                        st.error(f"Failed to save key: {e}")
+            else:
+                st.warning("Please enter a key first.")
 
-        st.write("---")
-        st.subheader("🎨 Customize Interface")
-        theme_choice = st.selectbox(
-            "Theme Mode",
-            options=["Dark Mode", "Light Mode"],
-            index=0 if st.session_state.theme == "Dark" else 1
-        )
-        new_theme = "Dark" if theme_choice == "Dark Mode" else "Light"
-        if new_theme != st.session_state.theme:
-            st.session_state.theme = new_theme
-            st.rerun()
+    st.write("---")
+    st.subheader("🎨 Customize Interface")
+    theme_choice = st.selectbox(
+        "Theme Mode",
+        options=["Dark Mode", "Light Mode"],
+        index=0 if st.session_state.theme == "Dark" else 1
+    )
+    new_theme = "Dark" if theme_choice == "Dark Mode" else "Light"
+    if new_theme != st.session_state.theme:
+        st.session_state.theme = new_theme
+        st.rerun()
+
 
 
 # ── Fetch Active Project Details ─────────────────────────────────────────────
