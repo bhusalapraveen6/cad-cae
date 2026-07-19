@@ -1,5 +1,11 @@
 import streamlit as st
 import os
+os.environ["HTTP_PROXY"] = ""
+os.environ["HTTPS_PROXY"] = ""
+os.environ["http_proxy"] = ""
+os.environ["https_proxy"] = ""
+os.environ["NO_PROXY"] = "*"
+os.environ["no_proxy"] = "*"
 import sys
 import uuid
 import json
@@ -203,15 +209,13 @@ def setup_database():
 db_ready = setup_database()
 
 # ── Session State Setup ───────────────────────────────────────────────────────
-if "user" not in st.session_state:
+if st.session_state.get("user") != "default_user" or st.session_state.get("token") is None:
     st.session_state.user = "default_user"
-if "user_id" not in st.session_state:
     st.session_state.user_id = "default_user_id"
-if "token" not in st.session_state:
     st.session_state.token = None
 
 # Auto-login default_user for backend database scoping
-if st.session_state.user == "default_user" and st.session_state.token is None:
+if st.session_state.token is None:
     try:
         import httpx
         # Attempt signup
