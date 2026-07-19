@@ -212,7 +212,7 @@ if "token" not in st.session_state:
 if "op_mode" not in st.session_state:
     st.session_state.op_mode = "API Client"
 if "api_url" not in st.session_state:
-    st.session_state.api_url = "http://localhost:8000/api"
+    st.session_state.api_url = "http://127.0.0.1:8000/api"
 if "active_project_id" not in st.session_state:
     st.session_state.active_project_id = None
 if "active_job_id" not in st.session_state:
@@ -818,9 +818,6 @@ with st.sidebar:
         auth_action = st.radio("Choose Action", ["Login", "Sign Up"], horizontal=True)
         username = st.text_input("Username", key="auth_username")
         password = st.text_input("Password", type="password", key="auth_password")
-
-        # Base URL config
-        st.session_state.api_url = st.text_input("FastAPI Base URL", value=st.session_state.api_url)
 
         if st.button("Submit"):
             if not username or not password:
