@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { OrbitControls, Grid, Environment } from '@react-three/drei'
 import * as THREE from 'three'
-import { getResults, type AnalysisResult, type ResultSummary } from '@/api/client'
+import api, { getResults, type AnalysisResult, type ResultSummary } from '@/api/client'
 import { useStore } from '@/store'
 
 // ── Colormap: jet (blue→green→red) ──────────────────────────────────────────
@@ -17,7 +17,51 @@ function jetColor(t: number): THREE.Color {
 }
 
 // ── Synthetic demo mesh (bracket shape) ──────────────────────────────────────
-function DemoMesh({ resultType, scale }: { resultType: string; scale: number }) {
+// ── CFD Flow Vectors Component ──────────────────────────────────────────────
+function CfdVectors({ count = 60, scale = 1.0 }: { count?: number; scale?: number }) {
+  const groupRef = useRef<THREE.Group>(null!)
+
+  useEffect(() => {
+    if (!groupRef.current) return
+    groupRef.current.clear()
+
+    const length = 0.08
+    const hex = 0x00ffcc
+    
+    for (let i = 0; i < count; i++) {
+      const x = (Math.random() - 0.5) * 0.9
+      const y = (Math.random() - 0.5) * 0.7
+      const z = (Math.random() - 0.5) * 0.18
+      
+      const distFromCenter = Math.sqrt(y*y + z*z)
+      const speed = Math.max(0.1, 1 - distFromCenter * 2.5)
+
+      const dir = new THREE.Vector3(1, 0, 0)
+      dir.y = Math.sin(x * 6 + y * 4) * 0.08
+      dir.z = Math.cos(x * 6 + z * 4) * 0.08
+      dir.normalize()
+
+      const origin = new THREE.Vector3(x, y, z)
+      const arrowHelper = new THREE.ArrowHelper(dir, origin, length * speed * scale, hex, 0.02, 0.015)
+      groupRef.current.add(arrowHelper)
+    }
+  }, [count, scale])
+
+  useFrame(() => {
+    if (!groupRef.current) return
+    groupRef.current.children.forEach((arrow: any) => {
+      arrow.position.x += 0.005
+      if (arrow.position.x > 0.45) {
+        arrow.position.x = -0.45
+      }
+    })
+  })
+
+  return <group ref={groupRef} />
+}
+
+// ── Synthetic demo mesh (bracket shape) ──────────────────────────────────────
+function DemoMesh({ resultType, scale, sliceAxis, sliceVal }: { resultType: string; scale: number; sliceAxis: string; sliceVal: number }) {
   const meshRef = useRef<THREE.Mesh>(null!)
   const geometryRef = useRef<THREE.BufferGeometry>(null!)
 
@@ -48,6 +92,9 @@ function DemoMesh({ resultType, scale }: { resultType: string; scale: number }) 
           t = (y + H / 2) / H
         } else if (resultType === 'modal') {
           t = Math.abs(Math.sin(ix / nx * Math.PI * 2)) * Math.abs(Math.cos(iy / ny * Math.PI))
+        } else if (resultType === 'cfd_internal' || resultType === 'cfd_external') {
+          const distFromCenter = Math.sqrt(y*y + z*z)
+          t = Math.max(0.1, 1 - distFromCenter * 2.5) + Math.random() * 0.05
         } else {
           t = Math.random()
         }
@@ -98,10 +145,21 @@ function DemoMesh({ resultType, scale }: { resultType: string; scale: number }) 
     }
   })
 
+  const clippingPlanes = []
+  if (sliceAxis && sliceAxis !== 'None') {
+    if (sliceAxis === 'X-Axis') {
+      clippingPlanes.push(new THREE.Plane(new THREE.Vector3(-1, 0, 0), sliceVal))
+    } else if (sliceAxis === 'Y-Axis') {
+      clippingPlanes.push(new THREE.Plane(new THREE.Vector3(0, -1, 0), sliceVal))
+    } else if (sliceAxis === 'Z-Axis') {
+      clippingPlanes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), sliceVal))
+    }
+  }
+
   return (
     <mesh ref={meshRef} castShadow receiveShadow>
       <boxGeometry args={[1, 0.8, 0.2]} />
-      <meshStandardMaterial vertexColors side={THREE.DoubleSide} roughness={0.4} metalness={0.6} />
+      <meshStandardMaterial vertexColors side={THREE.DoubleSide} roughness={0.4} metalness={0.6} clippingPlanes={clippingPlanes} clipShadows />
     </mesh>
   )
 }
@@ -146,7 +204,39 @@ function MetricCard({ label, value, unit, color }: { label: string; value?: numb
 export default function ResultsPage() {
   const { projectId, jobId } = useParams()
   const navigate = useNavigate()
-  const { jobs, setActiveJobId, setChatOpen } = useStore()
+  const { jobs, setActiveJobId, setChatOpen, addToast } = useStore()
+
+  const handleDownloadPdf = async () => {
+    try {
+      const response = await api.get(`/jobs/${jobId}/results/pdf`, { responseType: 'blob' })
+      const blob = new Blob([response.data], { type: 'application/pdf' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `CAE_Report_${jobId}.pdf`)
+      document.body.appendChild(link)
+      link.click()
+      link.parentNode?.removeChild(link)
+    } catch (err) {
+      addToast('error', 'Failed to download PDF report.')
+    }
+  }
+
+  const handleDownloadDocx = async () => {
+    try {
+      const response = await api.get(`/jobs/${jobId}/results/docx`, { responseType: 'blob' })
+      const blob = new Blob([response.data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `CAE_Report_${jobId}.docx`)
+      document.body.appendChild(link)
+      link.click()
+      link.parentNode?.removeChild(link)
+    } catch (err) {
+      addToast('error', 'Failed to download DOCX report.')
+    }
+  }
 
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [loading, setLoading] = useState(true)
@@ -155,12 +245,17 @@ export default function ResultsPage() {
   const [deformScale, setDeformScale] = useState(10)
   const [activeTab, setActiveTab] = useState<string>('summary')
 
+  const [sliceAxis, setSliceAxis] = useState<string>('None')
+  const [sliceVal, setSliceVal] = useState<number>(0)
+
   const job = jobs.find(j => j.id === jobId)
 
   useEffect(() => {
     if (!jobId) return
     setActiveJobId(jobId)
-    if (job) setResultType(job.analysis_type)
+    if (job && job.analysis_types && job.analysis_types.length > 0) {
+      setResultType(job.analysis_types[0])
+    }
 
     getResults(jobId)
       .then(setResult)
@@ -214,12 +309,15 @@ export default function ResultsPage() {
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
           {/* ── 3D Viewer (left) ── */}
           <div style={{ flex: 1, position: 'relative', background: 'var(--bg-deep)' }}>
-            <Canvas camera={{ position: [2, 1.5, 2], fov: 50 }} shadows>
+            <Canvas camera={{ position: [2, 1.5, 2], fov: 50 }} shadows gl={{ localClippingEnabled: true }}>
               <ambientLight intensity={0.4} />
               <directionalLight position={[5, 5, 5]} intensity={1} castShadow />
               <directionalLight position={[-3, 3, -3]} intensity={0.3} />
               <Suspense fallback={null}>
-                <DemoMesh resultType={resultType} scale={deformScale} />
+                <DemoMesh resultType={resultType} scale={deformScale} sliceAxis={sliceAxis} sliceVal={sliceVal} />
+                {(resultType === 'cfd_internal' || resultType === 'cfd_external') && (
+                  <CfdVectors />
+                )}
                 <Grid args={[10, 10]} cellColor="rgba(41,121,255,0.05)" sectionColor="rgba(41,121,255,0.1)" />
                 <Environment preset="city" />
               </Suspense>
@@ -228,6 +326,27 @@ export default function ResultsPage() {
 
             {/* Viewer overlay */}
             <div className="viewer-overlay" style={{ pointerEvents: 'none' }}>
+              {/* Analysis Selection Tabs */}
+              {job?.analysis_types && job.analysis_types.length > 1 && (
+                <div style={{
+                  position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
+                  background: 'rgba(10,15,30,0.85)', backdropFilter: 'blur(8px)',
+                  borderRadius: 'var(--radius-md)', border: '1px solid var(--border-mid)',
+                  padding: '4px 8px', display: 'flex', gap: 6, pointerEvents: 'all'
+                }}>
+                  {job.analysis_types.map(atype => (
+                    <button
+                      key={atype}
+                      className={`btn btn-sm ${resultType === atype ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => setResultType(atype)}
+                      style={{ fontSize: 11, padding: '4px 10px' }}
+                    >
+                      {atype.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {/* Title */}
               <div style={{ position: 'absolute', top: 16, left: 16 }}>
                 <div style={{
@@ -253,6 +372,45 @@ export default function ResultsPage() {
                     onChange={e => setDeformScale(Number(e.target.value))}
                     style={{ pointerEvents: 'all', width: 120 }}
                   />
+                </div>
+              )}
+
+              {/* Slicing Controls (for CFD) */}
+              {(resultType === 'cfd_internal' || resultType === 'cfd_external') && (
+                <div style={{
+                  position: 'absolute', bottom: 16, left: 16,
+                  background: 'rgba(10,15,30,0.85)', backdropFilter: 'blur(8px)',
+                  borderRadius: 'var(--radius-md)', border: '1px solid var(--border-mid)',
+                  padding: '8px 14px', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6, pointerEvents: 'all'
+                }}>
+                  <div style={{ color: 'var(--text-muted)' }}>✂️ CFD Slicing Cutaway</div>
+                  <select
+                    value={sliceAxis}
+                    onChange={e => {
+                      setSliceAxis(e.target.value)
+                      setSliceVal(0)
+                    }}
+                    style={{ background: 'var(--bg-deep)', border: '1px solid var(--border-mid)', borderRadius: 4, color: 'var(--text-primary)', padding: 4 }}
+                  >
+                    <option value="None">No Slice</option>
+                    <option value="X-Axis">X-Axis</option>
+                    <option value="Y-Axis">Y-Axis</option>
+                    <option value="Z-Axis">Z-Axis</option>
+                  </select>
+                  {sliceAxis !== 'None' && (
+                    <>
+                      <div style={{ color: 'var(--text-muted)' }}>Location: {sliceVal.toFixed(2)}</div>
+                      <input
+                        type="range"
+                        min={sliceAxis === 'X-Axis' ? -0.5 : sliceAxis === 'Y-Axis' ? -0.4 : -0.1}
+                        max={sliceAxis === 'X-Axis' ? 0.5 : sliceAxis === 'Y-Axis' ? 0.4 : 0.1}
+                        step={0.01}
+                        value={sliceVal}
+                        onChange={e => setSliceVal(Number(e.target.value))}
+                        style={{ width: 120 }}
+                      />
+                    </>
+                  )}
                 </div>
               )}
 
@@ -448,10 +606,20 @@ export default function ResultsPage() {
                     Download a summary report with all results, charts, and pass/fail assessment.
                   </p>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <button id="export-pdf-btn" className="btn btn-secondary" style={{ justifyContent: 'flex-start', gap: 10 }}>
+                    <button
+                      id="export-pdf-btn"
+                      className="btn btn-secondary"
+                      style={{ justifyContent: 'flex-start', gap: 10 }}
+                      onClick={handleDownloadPdf}
+                    >
                       <span>▤</span> Export as PDF
                     </button>
-                    <button id="export-docx-btn" className="btn btn-ghost" style={{ justifyContent: 'flex-start', gap: 10 }}>
+                    <button
+                      id="export-docx-btn"
+                      className="btn btn-ghost"
+                      style={{ justifyContent: 'flex-start', gap: 10 }}
+                      onClick={handleDownloadDocx}
+                    >
                       <span>▤</span> Export as DOCX
                     </button>
                   </div>

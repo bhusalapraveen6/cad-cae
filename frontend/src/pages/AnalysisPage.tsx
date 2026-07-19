@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useStore } from '@/store'
-import { getMaterials, createJob, getProject, getSuggestions, type AnalysisType, type Material } from '@/api/client'
+import { getMaterials, createMaterial, createJob, getProject, getSuggestions, type AnalysisType, type Material } from '@/api/client'
 
 const CATEGORY_ICONS: Record<string, string> = {
   structural: '⚡', thermal: '🔥', cfd: '💨', fatigue: '⚠',
@@ -44,6 +44,59 @@ export default function AnalysisPage() {
   const [submitting, setSubmitting] = useState(false)
   const [activeType, setActiveType] = useState<AnalysisType | null>(null)
 
+  const [showCustomMaterialModal, setShowCustomMaterialModal] = useState(false)
+  const [customMatName, setCustomMatName] = useState('')
+  const [customYoungs, setCustomYoungs] = useState('200')
+  const [customPoissons, setCustomPoissons] = useState('0.26')
+  const [customDensity, setCustomDensity] = useState('7850')
+  const [customYield, setCustomYield] = useState('250')
+  const [customConductivity, setCustomConductivity] = useState('50')
+  const [customSpecificHeat, setCustomSpecificHeat] = useState('490')
+
+  const handleSaveCustomMaterial = async () => {
+    if (!customMatName.trim()) {
+      addToast('error', 'Material name is required')
+      return
+    }
+    const youngs = parseFloat(customYoungs)
+    const poissons = parseFloat(customPoissons)
+    const density = parseFloat(customDensity)
+    const yield_str = parseFloat(customYield)
+    const cond = parseFloat(customConductivity)
+    const spec = parseFloat(customSpecificHeat)
+
+    if (isNaN(youngs) || youngs <= 0 ||
+        isNaN(poissons) || poissons < 0 || poissons >= 0.5 ||
+        isNaN(density) || density <= 0 ||
+        isNaN(yield_str) || yield_str <= 0 ||
+        isNaN(cond) || cond <= 0 ||
+        isNaN(spec) || spec <= 0) {
+      addToast('error', 'Please enter valid positive numbers for material properties.')
+      return
+    }
+
+    try {
+      const newMat: Material = {
+        name: customMatName,
+        category: 'Metal',
+        youngs_modulus: youngs,
+        poissons_ratio: poissons,
+        density,
+        yield_strength: yield_str,
+        thermal_conductivity: cond,
+        specific_heat: spec,
+        is_custom: true
+      }
+      const saved = await createMaterial(newMat)
+      setMaterials([...materials, saved])
+      setSelectedMaterial(saved)
+      setShowCustomMaterialModal(false)
+      addToast('success', 'Custom material saved successfully')
+    } catch (err) {
+      addToast('error', 'Failed to save custom material')
+    }
+  }
+
   // Load project details and AI suggestions on mount
   useEffect(() => {
     if (projectId) {
@@ -82,63 +135,58 @@ export default function AnalysisPage() {
     const global_element_size = elementSizeInput ? parseFloat(elementSizeInput.value) : 5
     const element_order = elementOrderSelect ? parseInt(elementOrderSelect.value) : 2
 
+    const allBoundaryConditions: any[] = []
+    let num_modes = 10
+    let nonlinear = false
+    let load_steps = 1
+    let steady_state = true
+
     for (const type of selectedAnalyses) {
-      try {
-        const defaultParams = getDefaultParams(type)
-        let typeParams: Record<string, any> = {}
-
-        if (type === 'static_structural' || type === 'nonlinear') {
-          const forceInput = document.getElementById('force-fz') as HTMLInputElement | null
-          if (forceInput) {
-            const fz = parseFloat(forceInput.value)
-            const fzVal = fz > 0 ? -fz : fz
-            typeParams.boundary_conditions = [
-              { type: 'fixed', description: 'Fixed Support', face_ids: [] },
-              { type: 'force', description: 'Applied Force', fx: 0, fy: 0, fz: fzVal, face_ids: [] }
-            ]
-          }
-        } else if (type === 'modal') {
-          const modesInput = document.getElementById('modal-num-modes') as HTMLInputElement | null
-          if (modesInput) {
-            typeParams.num_modes = parseInt(modesInput.value)
-          }
-        } else if (type === 'thermal_steady' || type === 'thermal_transient') {
-          const ambientInput = document.getElementById('thermal-ambient') as HTMLInputElement | null
-          if (ambientInput) {
-            const ambient = parseFloat(ambientInput.value)
-            typeParams.boundary_conditions = [
-              { type: 'heat_flux', description: 'Heat Input', flux: 1000, face_ids: [] },
-              { type: 'convection', description: 'Convection Cooling', film_coefficient: 25, ambient_temperature: ambient, face_ids: [] }
-            ]
-          }
-        } else if (type === 'cfd_internal' || type === 'cfd_external') {
-          const velocityInput = document.getElementById('cfd-velocity') as HTMLInputElement | null
-          if (velocityInput) {
-            const vel = parseFloat(velocityInput.value)
-            typeParams.boundary_conditions = [
-              { type: 'inlet', description: 'Inlet', velocity: vel, temperature: 20, face_ids: [] }
-            ]
-          }
-        }
-
-        const params = {
-          ...defaultParams,
-          ...typeParams,
-          mesh_settings: {
-            global_element_size,
-            refinement_factor: 1.0,
-            element_order
-          },
-          material: selectedMaterial || DEFAULT_STEEL
-        }
-
-        const job = await createJob(projectId, type, params)
-        addJob(job)
-        setActiveJobId(job.id)
-        addToast('success', `▶ ${type} job dispatched`)
-      } catch (err) {
-        addToast('error', `Failed to start ${type}`)
+      if (type === 'static_structural' || type === 'nonlinear') {
+        const forceInput = document.getElementById('force-fz') as HTMLInputElement | null
+        const fzVal = forceInput ? parseFloat(forceInput.value) : -1000
+        const fz = fzVal > 0 ? -fzVal : fzVal
+        allBoundaryConditions.push({ type: 'fixed', description: 'Fixed Support', face_ids: [] })
+        allBoundaryConditions.push({ type: 'force', description: 'Applied Force', fx: 0, fy: 0, fz, face_ids: [] })
+        if (type === 'nonlinear') nonlinear = true
+      } else if (type === 'modal') {
+        const modesInput = document.getElementById('modal-num-modes') as HTMLInputElement | null
+        num_modes = modesInput ? parseInt(modesInput.value) : 10
+        allBoundaryConditions.push({ type: 'fixed', description: 'Fixed Support', face_ids: [] })
+      } else if (type === 'thermal_steady' || type === 'thermal_transient') {
+        const ambientInput = document.getElementById('thermal-ambient') as HTMLInputElement | null
+        const ambient = ambientInput ? parseFloat(ambientInput.value) : 25
+        allBoundaryConditions.push({ type: 'heat_flux', description: 'Heat Input', flux: 1000, face_ids: [] })
+        allBoundaryConditions.push({ type: 'convection', description: 'Convection Cooling', film_coefficient: 25, ambient_temperature: ambient, face_ids: [] })
+        if (type === 'thermal_transient') steady_state = false
+      } else if (type === 'cfd_internal' || type === 'cfd_external') {
+        const velocityInput = document.getElementById('cfd-velocity') as HTMLInputElement | null
+        const vel = velocityInput ? parseFloat(velocityInput.value) : 1.0
+        allBoundaryConditions.push({ type: 'inlet', description: 'Inlet', velocity: vel, temperature: 20, face_ids: [] })
       }
+    }
+
+    const params = {
+      material: selectedMaterial || DEFAULT_STEEL,
+      boundary_conditions: allBoundaryConditions,
+      mesh_settings: {
+        global_element_size,
+        refinement_factor: 1.0,
+        element_order
+      },
+      num_modes,
+      nonlinear,
+      load_steps,
+      steady_state,
+    }
+
+    try {
+      const job = await createJob(projectId, selectedAnalyses, params)
+      addJob(job)
+      setActiveJobId(job.id)
+      addToast('success', `▶ Job dispatched with ${selectedAnalyses.length} analyses`)
+    } catch (err) {
+      addToast('error', 'Failed to dispatch job')
     }
 
     setSubmitting(false)
@@ -252,11 +300,16 @@ export default function AnalysisPage() {
                   id="material-select"
                   value={selectedMaterial?.name || ''}
                   onChange={e => {
-                    const mat = materials.find(m => m.name === e.target.value) || DEFAULT_STEEL
-                    setSelectedMaterial(mat)
+                    if (e.target.value === 'ADD_CUSTOM') {
+                      setShowCustomMaterialModal(true)
+                    } else {
+                      const mat = materials.find(m => m.name === e.target.value) || DEFAULT_STEEL
+                      setSelectedMaterial(mat)
+                    }
                   }}
                 >
                   {materials.map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
+                  <option value="ADD_CUSTOM" style={{ fontStyle: 'italic', fontWeight: 'bold' }}>+ Add New Material</option>
                 </select>
               </div>
               {selectedMaterial && (
@@ -368,6 +421,66 @@ export default function AnalysisPage() {
           </div>
         )}
       </div>
+
+      {showCustomMaterialModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          padding: 16
+        }}>
+          <div className="card" style={{
+            maxWidth: 500, width: '100%', background: 'var(--bg-card)',
+            border: '1px solid var(--border-mid)', borderRadius: 'var(--radius-lg)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.4)', padding: 'var(--space-lg)'
+          }}>
+            <h3 className="mb-md" style={{ color: 'var(--text-primary)' }}>Add Custom Material</h3>
+            
+            <div className="form-group mb-sm">
+              <label htmlFor="custom-mat-name" style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-secondary)' }}>Material Name</label>
+              <input id="custom-mat-name" type="text" value={customMatName} onChange={e => setCustomMatName(e.target.value)} placeholder="e.g., Titanium Alloy Ti-6Al-4V" style={{ width: '100%', padding: '8px 12px' }} />
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label htmlFor="custom-mat-youngs" style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-secondary)' }}>Young's Modulus (GPa)</label>
+                <input id="custom-mat-youngs" type="number" value={customYoungs} onChange={e => setCustomYoungs(e.target.value)} style={{ width: '100%', padding: '8px 12px' }} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label htmlFor="custom-mat-poissons" style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-secondary)' }}>Poisson's Ratio</label>
+                <input id="custom-mat-poissons" type="number" value={customPoissons} onChange={e => setCustomPoissons(e.target.value)} step={0.01} style={{ width: '100%', padding: '8px 12px' }} />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label htmlFor="custom-mat-density" style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-secondary)' }}>Density (kg/m³)</label>
+                <input id="custom-mat-density" type="number" value={customDensity} onChange={e => setCustomDensity(e.target.value)} style={{ width: '100%', padding: '8px 12px' }} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label htmlFor="custom-mat-yield" style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-secondary)' }}>Yield Strength (MPa)</label>
+                <input id="custom-mat-yield" type="number" value={customYield} onChange={e => setCustomYield(e.target.value)} style={{ width: '100%', padding: '8px 12px' }} />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label htmlFor="custom-mat-conductivity" style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-secondary)' }}>Thermal Conductivity (W/m·K)</label>
+                <input id="custom-mat-conductivity" type="number" value={customConductivity} onChange={e => setCustomConductivity(e.target.value)} style={{ width: '100%', padding: '8px 12px' }} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label htmlFor="custom-mat-spec-heat" style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--text-secondary)' }}>Specific Heat (J/kg·K)</label>
+                <input id="custom-mat-spec-heat" type="number" value={customSpecificHeat} onChange={e => setCustomSpecificHeat(e.target.value)} style={{ width: '100%', padding: '8px 12px' }} />
+              </div>
+            </div>
+
+            <div className="flex-end gap-sm" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => setShowCustomMaterialModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSaveCustomMaterial}>Save Material</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -68,7 +68,7 @@ export interface Project {
 export interface Job {
   id: string
   project_id: string
-  analysis_type: AnalysisType
+  analysis_types: AnalysisType[]
   status: JobStatus
   progress_percent: number
   progress_message?: string
@@ -122,12 +122,10 @@ export interface Material {
 export const uploadCADFile = async (
   file: File,
   projectName?: string,
-  useCase?: string,
 ): Promise<UploadResponse> => {
   const form = new FormData()
   form.append('file', file)
   if (projectName) form.append('project_name', projectName)
-  if (useCase) form.append('use_case', useCase)
   const { data } = await api.post('/upload', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
@@ -156,12 +154,12 @@ export const getSuggestions = async (projectId: string): Promise<{ suggestions: 
 
 export const createJob = async (
   projectId: string,
-  analysisType: AnalysisType,
+  analysisTypes: AnalysisType[],
   parameters: Record<string, unknown>,
 ): Promise<Job> => {
   const { data } = await api.post(`/projects/${projectId}/jobs`, {
     project_id: projectId,
-    analysis_type: analysisType,
+    analysis_types: analysisTypes,
     parameters,
   })
   return data
@@ -184,6 +182,11 @@ export const getResults = async (jobId: string): Promise<AnalysisResult> => {
 
 export const getMaterials = async (): Promise<Material[]> => {
   const { data } = await api.get('/materials')
+  return data
+}
+
+export const createMaterial = async (material: Material): Promise<Material> => {
+  const { data } = await api.post('/materials', material)
   return data
 }
 
@@ -243,6 +246,21 @@ export const streamChat = async (
     }
   }
   onDone()
+}
+
+export const getApiKeyStatus = async (): Promise<{ has_key: boolean; masked_key?: string }> => {
+  const { data } = await api.get('/auth/api-key')
+  return data
+}
+
+export const saveApiKey = async (key: string): Promise<{ has_key: boolean; masked_key?: string }> => {
+  const { data } = await api.post('/auth/api-key', { gemini_api_key: key })
+  return data
+}
+
+export const deleteApiKey = async (): Promise<{ has_key: boolean }> => {
+  const { data } = await api.delete('/auth/api-key')
+  return data
 }
 
 export default api

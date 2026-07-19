@@ -29,7 +29,6 @@ export default function UploadPage() {
   const [progress, setProgress] = useState(0)
   const [file, setFile] = useState<File | null>(null)
   const [projectName, setProjectName] = useState('')
-  const [useCase, setUseCase] = useState('')
   const [geometry, setGeometry] = useState<GeometryFeatures | null>(null)
   const [suggestions, setSuggestionsLocal] = useState<AnalysisSuggestion[]>([])
 
@@ -57,7 +56,7 @@ export default function UploadPage() {
 
     try {
       setProgress(30)
-      const result = await uploadCADFile(file, projectName, useCase)
+      const result = await uploadCADFile(file, projectName)
       setProgress(80)
 
       setUploadResult(result)
@@ -103,28 +102,16 @@ export default function UploadPage() {
           </p>
         </div>
 
-        {/* Project name + use case */}
-        <div className="grid-2 mb-lg">
-          <div className="form-group">
-            <label htmlFor="project-name">Project Name (optional)</label>
-            <input
-              id="project-name"
-              type="text"
-              value={projectName}
-              onChange={e => setProjectName(e.target.value)}
-              placeholder="e.g., Bracket Assembly v2"
-            />
-          </div>
-          <div className="form-group">
-            <label htmlFor="use-case">Use Case / Part Type (optional)</label>
-            <input
-              id="use-case"
-              type="text"
-              value={useCase}
-              onChange={e => setUseCase(e.target.value)}
-              placeholder="e.g., bracket, heat sink, pressure vessel, pipe"
-            />
-          </div>
+        {/* Project name */}
+        <div className="form-group mb-lg">
+          <label htmlFor="project-name">Project Name (optional)</label>
+          <input
+            id="project-name"
+            type="text"
+            value={projectName}
+            onChange={e => setProjectName(e.target.value)}
+            placeholder="e.g., Bracket Assembly v2"
+          />
         </div>
 
         {/* Dropzone */}

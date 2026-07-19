@@ -58,8 +58,8 @@ class Settings(BaseSettings):
         return Path(tempfile.gettempdir()) / "cae_jobs"
 
     # ── Chatbot ───────────────────────────────────────────────
-    anthropic_api_key: str = ""
-    claude_model: str = "claude-sonnet-4-5"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
     rag_collection_name: str = "cae_knowledge"
     chatbot_enabled: bool = True
 

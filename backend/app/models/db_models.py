@@ -56,6 +56,23 @@ class AnalysisType(str, enum.Enum):
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 
+class User(Base):
+    """User account model for authentication and scoping workspaces."""
+    __tablename__ = "users"
+
+    id:              Mapped[str]      = mapped_column(String(36), primary_key=True, default=_uuid)
+    username:        Mapped[str]      = mapped_column(String(100), unique=True, nullable=False)
+    hashed_password: Mapped[str]      = mapped_column(String(255), nullable=False)
+    gemini_api_key:  Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at:      Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    # Relationships
+    projects:        Mapped[list["Project"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+    def __repr__(self) -> str:
+        return f"<User id={self.id!r} username={self.username!r}>"
+
+
 class Project(Base):
     """Top-level container for a CAD file and all its analyses."""
     __tablename__ = "projects"
@@ -66,6 +83,9 @@ class Project(Base):
     created_at:  Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at:  Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
+    # User scoping
+    user_id:     Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+
     # CAD file metadata
     cad_filename:   Mapped[Optional[str]] = mapped_column(String(255))
     cad_format:     Mapped[Optional[str]] = mapped_column(String(20))   # step, iges, stl…
@@ -73,6 +93,7 @@ class Project(Base):
     cad_file_size:  Mapped[Optional[int]] = mapped_column(Integer)      # bytes
 
     # Relationships
+    user:      Mapped[Optional["User"]]             = relationship(back_populates="projects")
     geometry:  Mapped[Optional["GeometryFeatures"]] = relationship(back_populates="project", cascade="all, delete-orphan", uselist=False)
     jobs:      Mapped[list["Job"]]                  = relationship(back_populates="project", cascade="all, delete-orphan", order_by="Job.created_at.desc()")
 
@@ -133,10 +154,7 @@ class Job(Base):
     id:         Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
 
-    analysis_type: Mapped[str] = mapped_column(
-        Enum(AnalysisType, values_callable=lambda obj: [e.value for e in obj]),
-        nullable=False
-    )
+    analysis_types: Mapped[list[str]] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(
         Enum(JobStatus, values_callable=lambda obj: [e.value for e in obj]),
         default=JobStatus.PENDING
@@ -164,7 +182,7 @@ class Job(Base):
     chat_messages: Mapped[list["ChatMessage"]]        = relationship(back_populates="job", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
-        return f"<Job id={self.id!r} type={self.analysis_type!r} status={self.status!r}>"
+        return f"<Job id={self.id!r} types={self.analysis_types!r} status={self.status!r}>"
 
 
 class AnalysisResult(Base):
@@ -228,7 +246,8 @@ class Material(Base):
     __tablename__ = "materials"
 
     id:   Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
     category: Mapped[str] = mapped_column(String(50))  # Metal, Plastic, Composite…
 
     # Mechanical properties

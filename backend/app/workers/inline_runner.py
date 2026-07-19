@@ -21,37 +21,43 @@ logger = structlog.get_logger(__name__)
 
 async def run_analysis_inline(
     job_id: str,
-    analysis_type: str,
+    analysis_types: list[str],
     parameters: Dict[str, Any],
     mesh_file: Optional[str] = None,
 ) -> None:
-    """Run an analysis job inline (asyncio, no Celery). Updates DB progress live."""
+    """Run multiple analysis types in parallel inline (asyncio, no Celery). Updates DB progress live."""
 
     # Give the FastAPI request handler time to commit the job row first
     await asyncio.sleep(0.3)
 
-    async def update_progress(pct: int, msg: str) -> None:
-        """Update job progress in the database."""
+    # Coordinate progress updates
+    progress_dict = {atype: 0 for atype in analysis_types}
+    progress_msg_dict = {atype: "Queued" for atype in analysis_types}
+
+    async def update_overall_progress():
+        overall_pct = sum(progress_dict.values()) // len(analysis_types)
+        overall_msg = "; ".join(f"{atype}: {progress_msg_dict[atype]}" for atype in analysis_types)
         try:
             async with get_db_context() as db:
                 from sqlalchemy import select
-                job = (await db.execute(
-                    select(Job).where(Job.id == job_id)
-                )).scalar_one_or_none()
+                job = (await db.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
                 if job:
-                    job.progress_percent = pct
-                    job.progress_message = msg
+                    job.progress_percent = overall_pct
+                    job.progress_message = overall_msg[:450]
         except Exception as e:
-            logger.warning("Progress update failed", job_id=job_id, error=str(e))
+            logger.warning("Overall progress update failed", job_id=job_id, error=str(e))
 
-    def sync_progress(pct: int, msg: str) -> None:
-        """Sync wrapper for async update_progress — schedules on the running loop."""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(update_progress(pct, msg))
-        except Exception:
-            pass
+    def make_progress_cb(atype: str):
+        def cb(pct: int, msg: str):
+            progress_dict[atype] = pct
+            progress_msg_dict[atype] = msg
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(update_overall_progress())
+            except Exception:
+                pass
+        return cb
 
     try:
         # ── Mark job as SOLVING ────────────────────────────────────────────────
@@ -77,98 +83,135 @@ async def run_analysis_inline(
             logger.error("Job not found after retries — aborting", job_id=job_id)
             return
 
-        atype = AnalysisType(analysis_type)
-        mesh_path = Path(mesh_file) if mesh_file else None
-        logger.info("Starting inline analysis", job_id=job_id, type=analysis_type)
+        logger.info("Starting inline multiple analysis", job_id=job_id, types=analysis_types)
 
-        # ── Dispatch to the correct solver ─────────────────────────────────────
-        summary: Dict[str, Any] = {}
-        result_data: Dict[str, Any] = {}
+        async def run_single(atype_str: str):
+            from app.models.db_models import AnalysisType
+            atype = AnalysisType(atype_str)
+            mesh_path = Path(mesh_file) if mesh_file else None
+            summary_single = {}
+            res_data_single = {}
+            cb = make_progress_cb(atype_str)
 
-        if atype == AnalysisType.STATIC_STRUCTURAL or atype == AnalysisType.NONLINEAR:
-            from app.solvers.structural.calculix_wrapper import run_static_structural, StructuralResult
-            solver_params = {**parameters}
-            if atype == AnalysisType.NONLINEAR:
-                solver_params["nonlinear"] = True
-            res: StructuralResult = await run_static_structural(job_id, mesh_path, solver_params, sync_progress)
-            summary = {
-                "max_stress": round(res.max_stress, 4),
-                "min_stress": round(res.min_stress, 4),
-                "max_displacement": round(res.max_displacement, 6),
-                "min_safety_factor": round(res.min_safety_factor, 3),
-            }
-            result_data = res.result_data or {}
+            cb(10, "Starting solver initialization...")
 
-        elif atype == AnalysisType.BUCKLING:
-            from app.solvers.structural.calculix_wrapper import run_buckling, BucklingResult
-            res: BucklingResult = await run_buckling(job_id, mesh_path, parameters, sync_progress)
-            summary = {
-                "buckling_factors": res.eigenvalues,
-                "min_buckling_factor": round(min(res.eigenvalues), 3) if res.eigenvalues else None,
-            }
-            result_data = res.result_data or {}
+            if atype == AnalysisType.STATIC_STRUCTURAL or atype == AnalysisType.NONLINEAR:
+                from app.solvers.structural.calculix_wrapper import run_static_structural, StructuralResult
+                solver_params = {**parameters}
+                if atype == AnalysisType.NONLINEAR:
+                    solver_params["nonlinear"] = True
+                res: StructuralResult = await run_static_structural(job_id, mesh_path, solver_params, cb)
+                summary_single = {
+                    "max_stress": round(res.max_stress, 4),
+                    "min_stress": round(res.min_stress, 4),
+                    "max_displacement": round(res.max_displacement, 6),
+                    "min_safety_factor": round(res.min_safety_factor, 3),
+                }
+                res_data_single = res.result_data or {}
 
-        elif atype == AnalysisType.MODAL:
-            from app.solvers.structural.calculix_wrapper import run_modal, ModalResult
-            res: ModalResult = await run_modal(job_id, mesh_path, parameters, sync_progress)
-            summary = {
-                "natural_frequencies": res.frequencies,
-                "mode_count": len(res.frequencies) if res.frequencies else 0,
-            }
-            result_data = res.result_data or {}
+            elif atype == AnalysisType.BUCKLING:
+                from app.solvers.structural.calculix_wrapper import run_buckling, BucklingResult
+                res: BucklingResult = await run_buckling(job_id, mesh_path, parameters, cb)
+                summary_single = {
+                    "buckling_factors": res.eigenvalues,
+                    "min_buckling_factor": round(min(res.eigenvalues), 3) if res.eigenvalues else None,
+                }
+                res_data_single = res.result_data or {}
 
-        elif atype in (AnalysisType.THERMAL_STEADY, AnalysisType.THERMAL_TRANSIENT, AnalysisType.THERMAL_STRUCTURAL):
-            from app.solvers.thermal.thermal_solver import run_thermal, ThermalResult
-            solver_params = {**parameters}
-            if atype == AnalysisType.THERMAL_TRANSIENT:
-                solver_params["steady_state"] = False
-            res: ThermalResult = await run_thermal(job_id, mesh_path, solver_params, sync_progress)
-            summary = {
-                "max_temperature": round(res.max_temperature, 2),
-                "min_temperature": round(res.min_temperature, 2),
-            }
-            result_data = res.result_data or {}
+            elif atype == AnalysisType.MODAL:
+                from app.solvers.structural.calculix_wrapper import run_modal, ModalResult
+                res: ModalResult = await run_modal(job_id, mesh_path, parameters, cb)
+                summary_single = {
+                    "natural_frequencies": res.frequencies,
+                    "mode_count": len(res.frequencies) if res.frequencies else 0,
+                }
+                res_data_single = res.result_data or {}
 
-        elif atype == AnalysisType.FATIGUE:
-            from app.solvers.fatigue.sn_curve import compute_fatigue_life, FatigueResult
-            import numpy as np
-            mat = parameters.get("material", {})
-            # Stress field from structural results or scalar fallback
-            stress_amplitude = float(parameters.get("stress_amplitude", 100.0))
-            stress_ratio = float(parameters.get("stress_ratio", -1.0))
-            correction = parameters.get("mean_stress_correction", "goodman")
-            # Build a minimal von-mises field for the fatigue calculation
-            von_mises = np.array([stress_amplitude], dtype=float)
+            elif atype in (AnalysisType.THERMAL_STEADY, AnalysisType.THERMAL_TRANSIENT, AnalysisType.THERMAL_STRUCTURAL):
+                from app.solvers.thermal.thermal_solver import run_thermal, ThermalResult
+                solver_params = {**parameters}
+                if atype == AnalysisType.THERMAL_TRANSIENT:
+                    solver_params["steady_state"] = False
+                res: ThermalResult = await run_thermal(job_id, mesh_path, solver_params, cb)
+                summary_single = {
+                    "max_temperature": round(res.max_temperature, 2),
+                    "min_temperature": round(res.min_temperature, 2),
+                }
+                res_data_single = res.result_data or {}
 
-            await update_progress(20, "Loading S-N curve data...")
-            await asyncio.sleep(0.3)
-            await update_progress(60, "Running fatigue life calculation...")
-            res: FatigueResult = await asyncio.to_thread(
-                compute_fatigue_life, von_mises, mat, stress_ratio, correction
-            )
-            await update_progress(95, "Computing safety factors...")
-            await asyncio.sleep(0.2)
-            summary = {
-                "fatigue_life_cycles": res.min_life_cycles,
-                "min_safety_factor": round(res.min_safety_factor, 3),
-            }
-            result_data = res.result_data or {}
+            elif atype == AnalysisType.FATIGUE:
+                from app.solvers.fatigue.sn_curve import compute_fatigue_life, FatigueResult
+                import numpy as np
+                mat = parameters.get("material", {})
+                stress_amplitude = float(parameters.get("stress_amplitude", 100.0))
+                stress_ratio = float(parameters.get("stress_ratio", -1.0))
+                correction = parameters.get("mean_stress_correction", "goodman")
+                von_mises = np.array([stress_amplitude], dtype=float)
 
-        elif atype in (AnalysisType.CFD_INTERNAL, AnalysisType.CFD_EXTERNAL):
-            from app.solvers.cfd.openfoam_wrapper import run_cfd, CFDResult
-            res: CFDResult = await run_cfd(job_id, mesh_path, parameters, sync_progress, analysis_type=atype.value)
-            summary = {
-                "max_velocity": round(res.max_velocity, 4),
-                "max_pressure": round(res.max_pressure, 2),
-                "pressure_drop": round(res.pressure_drop, 2),
-            }
-            result_data = res.result_data or {}
+                cb(20, "Loading S-N curve data...")
+                await asyncio.sleep(0.3)
+                cb(60, "Running fatigue life calculation...")
+                res: FatigueResult = await asyncio.to_thread(
+                    compute_fatigue_life, von_mises, mat, stress_ratio, correction
+                )
+                cb(95, "Computing safety factors...")
+                await asyncio.sleep(0.2)
+                summary_single = {
+                    "fatigue_life_cycles": res.min_life_cycles,
+                    "min_safety_factor": round(res.min_safety_factor, 3),
+                }
+                res_data_single = res.result_data or {}
 
-        else:
-            raise ValueError(f"Unknown analysis type: {analysis_type}")
+            elif atype in (AnalysisType.CFD_INTERNAL, AnalysisType.CFD_EXTERNAL):
+                from app.solvers.cfd.openfoam_wrapper import run_cfd, CFDResult
+                res: CFDResult = await run_cfd(job_id, mesh_path, parameters, cb, analysis_type=atype.value)
+                summary_single = {
+                    "max_velocity": round(res.max_velocity, 4),
+                    "max_pressure": round(res.max_pressure, 2),
+                    "pressure_drop": round(res.pressure_drop, 2),
+                }
+                res_data_single = res.result_data or {}
+
+            else:
+                raise ValueError(f"Unknown analysis type: {atype_str}")
+
+            cb(100, "Done")
+            return atype_str, summary_single, res_data_single
+
+        # Run all selected analysis types in parallel
+        tasks = [run_single(atype) for atype in analysis_types]
+        results_list = await asyncio.gather(*tasks)
+
+        # Aggregate summaries and results data
+        merged_summary = {}
+        merged_result_data = {}
+        for atype_str, s, rd in results_list:
+            merged_summary[atype_str] = s
+            merged_result_data[atype_str] = rd
+
+        # Extract scalar summary fields (lift up first available metric for DB columns compatibility)
+        max_stress = None
+        min_stress = None
+        max_displacement = None
+        min_safety_factor = None
+        max_temperature = None
+        natural_frequencies = None
+        buckling_factors = None
+        fatigue_life_cycles = None
+
+        for _, s, _ in results_list:
+            if s.get("max_stress") is not None: max_stress = s["max_stress"]
+            if s.get("min_stress") is not None: min_stress = s["min_stress"]
+            if s.get("max_displacement") is not None: max_displacement = s["max_displacement"]
+            if s.get("min_safety_factor") is not None:
+                if min_safety_factor is None or s["min_safety_factor"] < min_safety_factor:
+                    min_safety_factor = s["min_safety_factor"]
+            if s.get("max_temperature") is not None: max_temperature = s["max_temperature"]
+            if s.get("natural_frequencies") is not None: natural_frequencies = s["natural_frequencies"]
+            if s.get("buckling_factors") is not None: buckling_factors = s["buckling_factors"]
+            if s.get("fatigue_life_cycles") is not None: fatigue_life_cycles = s["fatigue_life_cycles"]
 
         # ── Serialise numpy arrays in result_data ──────────────────────────────
-        import json
         def _make_serialisable(obj: Any) -> Any:
             try:
                 import numpy as np
@@ -184,8 +227,8 @@ async def run_analysis_inline(
                 return [_make_serialisable(v) for v in obj]
             return obj
 
-        result_data = _make_serialisable(result_data)
-        summary = _make_serialisable(summary)
+        merged_result_data = _make_serialisable(merged_result_data)
+        merged_summary = _make_serialisable(merged_summary)
 
         # ── Save result and mark COMPLETED ─────────────────────────────────────
         async with get_db_context() as db:
@@ -199,22 +242,24 @@ async def run_analysis_inline(
 
             result_row = AnalysisResult(
                 job_id=job_id,
-                # Scalar summary fields (mapped from whichever analysis type ran)
-                max_stress=summary.get("max_stress"),
-                min_stress=summary.get("min_stress"),
-                max_displacement=summary.get("max_displacement"),
-                min_safety_factor=summary.get("min_safety_factor"),
-                max_temperature=summary.get("max_temperature"),
-                natural_frequencies=summary.get("natural_frequencies"),
-                buckling_factors=summary.get("buckling_factors"),
-                fatigue_life_cycles=summary.get("fatigue_life_cycles"),
-                # Full result payload
-                result_data={**summary, **result_data},
+                max_stress=max_stress,
+                min_stress=min_stress,
+                max_displacement=max_displacement,
+                min_safety_factor=min_safety_factor,
+                max_temperature=max_temperature,
+                natural_frequencies=natural_frequencies,
+                buckling_factors=buckling_factors,
+                fatigue_life_cycles=fatigue_life_cycles,
+                # Store full combined dictionary in result_data
+                result_data={"summaries": merged_summary, "results": merged_result_data},
             )
             db.add(result_row)
+            await db.flush()
 
+            from app.results.report_generator import generate_reports_for_job
+            await generate_reports_for_job(job_id, db)
 
-        logger.info("Inline analysis complete", job_id=job_id, type=analysis_type, summary=summary)
+        logger.info("Inline multiple analysis complete", job_id=job_id, types=analysis_types)
 
     except Exception as exc:
         import traceback

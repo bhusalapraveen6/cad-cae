@@ -255,7 +255,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Material seeding skipped", error=str(e))
 
-    if settings.chatbot_enabled and settings.anthropic_api_key:
+    if settings.chatbot_enabled and settings.gemini_api_key:
         try:
             from app.chatbot.rag_pipeline import init_knowledge_base
             await init_knowledge_base()
@@ -309,8 +309,10 @@ from app.api.upload import router as upload_router
 from app.api._routers import (
     projects_router, analysis_router, jobs_router,
     results_router, materials_router, chat_router,
+    auth_router,
 )
 
+app.include_router(auth_router,      prefix=settings.api_prefix, tags=["Auth"])
 app.include_router(upload_router,    prefix=settings.api_prefix, tags=["Upload"])
 app.include_router(projects_router,  prefix=settings.api_prefix, tags=["Projects"])
 app.include_router(analysis_router,  prefix=settings.api_prefix, tags=["Analysis"])
@@ -327,7 +329,7 @@ async def health_check():
         "env": settings.app_env,
         "mock_cad": settings.mock_cad_mode,
         "mock_solver": settings.mock_solver_mode,
-        "chatbot_enabled": settings.chatbot_enabled and bool(settings.anthropic_api_key),
+        "chatbot_enabled": settings.chatbot_enabled and bool(settings.gemini_api_key),
     }
 
 

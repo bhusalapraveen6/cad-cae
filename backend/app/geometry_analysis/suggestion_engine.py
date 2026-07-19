@@ -91,7 +91,6 @@ def suggest_analyses(
     Produces a deduplicated, priority-sorted list of analysis recommendations.
 
     user_context keys (all optional):
-      - "use_case": str   e.g. "bracket", "heat_sink", "pipe", "pressure_vessel"
       - "cyclic_load": bool
       - "high_temperature": bool
       - "fluid_flow": bool
@@ -113,8 +112,6 @@ def suggest_analyses(
             icon=meta["icon"],
             category=meta["category"],
         ))
-
-    use_case = user_context.get("use_case", "").lower()
 
     # ── Static Structural — always recommended ─────────────────────────────────
     add(
@@ -183,63 +180,6 @@ def suggest_analyses(
             "creates buckling risk — linear buckling analysis recommended.",
             confidence=0.78,
             priority=3,
-        )
-
-    # ── Use-case specific rules ────────────────────────────────────────────────
-    if "heat sink" in use_case or "heatsink" in use_case:
-        add(
-            AnalysisType.THERMAL_STEADY,
-            "Heat sink application: steady-state thermal analysis to optimise fin effectiveness.",
-            confidence=0.92,
-            priority=1,
-        )
-        add(
-            AnalysisType.CFD_EXTERNAL,
-            "Natural/forced convection CFD recommended for accurate heat transfer coefficient estimation.",
-            confidence=0.80,
-            priority=2,
-        )
-
-    if "pressure vessel" in use_case or "tank" in use_case:
-        add(
-            AnalysisType.STATIC_STRUCTURAL,
-            "Pressure vessel: static structural under internal pressure (per ASME BPVC Section VIII).",
-            confidence=0.95,
-            priority=1,
-        )
-        add(
-            AnalysisType.FATIGUE,
-            "Pressure vessels are subject to cyclic pressurisation — fatigue life assessment is required by most design codes.",
-            confidence=0.88,
-            priority=2,
-        )
-        add(
-            AnalysisType.BUCKLING,
-            "External pressure scenarios require buckling analysis for thin-walled vessels.",
-            confidence=0.72,
-            priority=3,
-        )
-
-    if "pipe" in use_case or "duct" in use_case:
-        add(
-            AnalysisType.CFD_INTERNAL,
-            "Pipe/duct geometry: internal flow CFD to compute velocity profiles, pressure drop, and Re.",
-            confidence=0.90,
-            priority=1,
-        )
-        add(
-            AnalysisType.THERMAL_STRUCTURAL,
-            "Thermal expansion stresses in piping systems: coupled thermal-structural analysis.",
-            confidence=0.70,
-            priority=4,
-        )
-
-    if "bracket" in use_case or "mount" in use_case:
-        add(
-            AnalysisType.STATIC_STRUCTURAL,
-            "Bracket/mount: check load-path efficiency and factor of safety under worst-case load.",
-            confidence=0.95,
-            priority=1,
         )
 
     if user_context.get("safety_critical"):

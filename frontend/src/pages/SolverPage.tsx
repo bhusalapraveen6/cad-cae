@@ -21,7 +21,7 @@ function JobCard({ job }: { job: Job }) {
       <div className="flex-between mb-md">
         <div>
           <h4 style={{ marginBottom: 4 }}>
-            {job.analysis_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+            {job.analysis_types ? job.analysis_types.map(t => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())).join(', ') : 'Job'}
           </h4>
           <span className={`status-badge ${statusClass}`}>
             <span className="status-dot" />

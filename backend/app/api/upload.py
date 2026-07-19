@@ -14,6 +14,9 @@ from app.database import get_db
 from app.models.db_models import GeometryFeatures, Project
 from app.models.schemas import UploadResponse
 
+from app.api._routers import get_current_user
+import app.models.db_models as M
+
 logger = structlog.get_logger(__name__)
 router = APIRouter()
 
@@ -22,23 +25,18 @@ router = APIRouter()
 async def upload_cad_file(
     file: UploadFile = File(...),
     project_name: str = Form(default=""),
-    use_case: str = Form(default=""),
     db: AsyncSession = Depends(get_db),
+    current_user: M.User = Depends(get_current_user),
 ):
     """
     Upload a CAD file (STEP, IGES, STL, OBJ).
     Returns project ID, geometry features, and analysis suggestions.
     """
-    # ── Validate extension ────────────────────────────────────────────────────
-    suffix = Path(file.filename).suffix.lower()
-    if suffix not in settings.allowed_extensions:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unsupported file format '{suffix}'. Allowed: {settings.allowed_extensions}",
-        )
-
-    # ── Check file size ───────────────────────────────────────────────────────
+    # ── Check file size & sanity check ────────────────────────────────────────
     file_bytes = await file.read()
+    suffix = Path(file.filename).suffix.lower()
+    if len(file_bytes) == 0:
+        raise HTTPException(status_code=422, detail="Uploaded file is empty.")
     size_mb = len(file_bytes) / (1024 * 1024)
     if size_mb > settings.max_file_size_mb:
         raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_file_size_mb} MB limit")
@@ -59,8 +57,7 @@ async def upload_cad_file(
     try:
         geom_data = await parse_cad_file(saved_path)
         features  = extract_features(geom_data)
-        user_context = {"use_case": use_case} if use_case else {}
-        suggestions  = suggest_analyses(features, user_context)
+        suggestions  = suggest_analyses(features, None)
     except Exception as e:
         logger.error("Geometry analysis failed", error=str(e))
         raise HTTPException(status_code=500, detail=f"Geometry analysis failed: {e}")
@@ -74,6 +71,7 @@ async def upload_cad_file(
         cad_format=suffix.lstrip("."),
         cad_file_path=str(saved_path),
         cad_file_size=len(file_bytes),
+        user_id=current_user.id,
     )
     db.add(project)
 

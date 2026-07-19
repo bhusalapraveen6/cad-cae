@@ -510,6 +510,9 @@ async def _mock_static_result(
     yield_str = mat.get("yield_strength", 250.0)  # MPa
     is_nonlinear = params.get("nonlinear", False)
 
+    mesh_settings = params.get("mesh_settings", {})
+    mesh_size = max(0.5, min(float(mesh_settings.get("global_element_size", 5.0)), 50.0))
+
     stages = [
         (15, "Setting up non-linear elastoplastic model…"),
         (15, "Setting up non-linear elastoplastic model..."),
@@ -528,9 +531,14 @@ async def _mock_static_result(
         (95, "Extracting result fields..."),
         (100, "Static structural complete [OK]"),
     ]
+    
+    # Scale calculation sleep time (finer mesh takes longer to compute)
+    total_sleep = max(0.2, min(5.0 / mesh_size, 4.0))
+    step_sleep = total_sleep / len(stages)
+
     for pct, msg in stages:
         await _report(progress_callback, pct, msg)
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(step_sleep)
 
     # Synthetic cantilever-beam-like result
     bcs = params.get("boundary_conditions", [])
@@ -547,6 +555,10 @@ async def _mock_static_result(
     max_disp = F * L**3 / (3 * E_gpa * 1e9 * I) * 1000  # mm
     max_stress = F * L * (h / 2) / I / 1e6  # MPa
 
+    # Scale results slightly depending on mesh size (discretization error)
+    max_disp = max_disp * (1.0 - 0.05 * (mesh_size / 5.0))
+    max_stress = max_stress * (1.0 - 0.03 * (mesh_size / 5.0))
+
     # Simulate non-linear yielding
     if is_nonlinear and max_stress > yield_str:
         excess_stress = max_stress - yield_str
@@ -559,11 +571,12 @@ async def _mock_static_result(
     result.max_displacement = round(max_disp + random.uniform(-0.01, 0.01), 4)
     result.min_safety_factor = round(yield_str / max(result.max_stress, 1.0), 2)
 
-    # Generate a small synthetic mesh for viewer
-    n = 50
+    # Generate node count based on mesh size (smaller mesh size -> higher node count)
+    n = int(max(10, min(250 / mesh_size, 500)))
     xs = np.linspace(0, 100, n)
     result.node_coords = np.column_stack([xs, np.zeros(n), np.zeros(n)]).astype(np.float32)
-    # Displacement field: zero at x=0, max at x=100
+    
+    # Displacement field
     result.displacement_field = np.column_stack([
         np.zeros(n), np.zeros(n),
         np.linspace(0, result.max_displacement, n)

@@ -29,6 +29,19 @@ def _run_async(coro):
     return loop.run_until_complete(coro)
 
 
+@celery_app.task(bind=True, name="app.workers.tasks.run_multiple_analyses_task", max_retries=1)
+def run_multiple_analyses_task(
+    self,
+    job_id: str,
+    analysis_types: List[str],
+    parameters: Dict[str, Any],
+    mesh_file_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    from app.workers.inline_runner import run_analysis_inline
+    _run_async(run_analysis_inline(job_id, analysis_types, parameters, mesh_file_path))
+    return {"status": "success"}
+
+
 @celery_app.task(bind=True, name="app.workers.tasks.run_analysis_task", max_retries=1)
 def run_analysis_task(
     self,
@@ -164,6 +177,10 @@ async def _run_analysis_async(
                 result_data=result_dict,
             )
             db.add(analysis_result)
+            await db.flush()
+
+            from app.results.report_generator import generate_reports_for_job
+            await generate_reports_for_job(job_id, db)
 
         log.info("Analysis completed successfully")
         return result_dict

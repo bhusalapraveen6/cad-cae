@@ -218,14 +218,14 @@ class CFDParams(BaseModel):
 
 class JobCreate(BaseModel):
     project_id: str
-    analysis_type: AnalysisType
+    analysis_types: List[AnalysisType]
     parameters: Dict[str, Any] = Field(default_factory=dict)
 
 
 class JobResponse(BaseModel):
     id: str
     project_id: str
-    analysis_type: AnalysisType
+    analysis_types: List[AnalysisType]
     status: JobStatus
     progress_percent: int
     progress_message: Optional[str]
@@ -301,3 +301,31 @@ class UploadResponse(BaseModel):
     file_size: int
     geometry_features: Optional[GeometryFeaturesResponse] = None
     suggestions: List[AnalysisSuggestion] = Field(default_factory=list)
+
+
+# ── Authentication ─────────────────────────────────────────────────────────────
+
+class UserSignupRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    password: str = Field(..., min_length=6, max_length=100)
+
+
+class UserLoginRequest(BaseModel):
+    username: str = Field(...)
+    password: str = Field(...)
+
+
+class TokenResponse(BaseModel):
+    token: str
+    user_id: str
+    username: str
+
+
+class UserApiKeyUpdate(BaseModel):
+    gemini_api_key: str = Field(..., min_length=1, max_length=200)
+
+
+class UserApiKeyResponse(BaseModel):
+    has_key: bool
+    masked_key: Optional[str] = None
+
