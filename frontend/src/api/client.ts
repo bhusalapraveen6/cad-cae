@@ -5,6 +5,42 @@ const api = axios.create({
   timeout: 60000,
 })
 
+// Silent guest authentication interceptor
+api.interceptors.request.use(async (config) => {
+  if (config.url?.startsWith('/auth/login') || config.url?.startsWith('/auth/signup') || config.url?.includes('/health')) {
+    return config
+  }
+
+  let token = localStorage.getItem('guest_token')
+  if (!token) {
+    const base = import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}/api` : '/api'
+    try {
+      const res = await axios.post(`${base}/auth/login`, { username: 'guest_user', password: 'guest_password' })
+      token = res.data.token
+    } catch (e) {
+      try {
+        await axios.post(`${base}/auth/signup`, { username: 'guest_user', password: 'guest_password' })
+        const res = await axios.post(`${base}/auth/login`, { username: 'guest_user', password: 'guest_password' })
+        token = res.data.token
+      } catch (err) {
+        console.error('Silent guest auth failed:', err)
+      }
+    }
+
+    if (token) {
+      localStorage.setItem('guest_token', token)
+    }
+  }
+
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+}, (error) => {
+  return Promise.reject(error)
+})
+
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type AnalysisType =
@@ -203,7 +239,9 @@ export const subscribeJobProgress = (
   onDone: () => void,
 ): (() => void) => {
   const baseURL = import.meta.env.VITE_API_URL || ''
-  const es = new EventSource(`${baseURL}/api/jobs/${jobId}/progress`)
+  const token = localStorage.getItem('guest_token')
+  const url = `${baseURL}/api/jobs/${jobId}/progress` + (token ? `?token=${token}` : '')
+  const es = new EventSource(url)
   es.onmessage = (e) => {
     const data = JSON.parse(e.data)
     if (data.done) {
@@ -226,9 +264,14 @@ export const streamChat = async (
   onDone: () => void,
 ): Promise<void> => {
   const baseURL = import.meta.env.VITE_API_URL || ''
+  const token = localStorage.getItem('guest_token')
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
   const response = await fetch(`${baseURL}/api/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ project_id: projectId, job_id: jobId, message, stream: true }),
   })
   const reader = response.body!.getReader()
