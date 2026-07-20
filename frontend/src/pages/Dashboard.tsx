@@ -26,6 +26,8 @@ import {
 } from 'lucide-react'
 
 import { useStore } from '@/store'
+import { useTheme } from '@/context/ThemeContext'
+
 import {
   uploadCADFile,
   getProjects,
@@ -124,8 +126,9 @@ export default function Dashboard() {
   // Tab control state: geometry (Geometry Analysis), setup (Simulation Setup), results (3D Viewer & Results), chat (AI Assistant Chat)
   const [activeTab, setActiveTab] = useState<'geometry' | 'setup' | 'results' | 'chat'>('geometry')
   
-  // Theme state: dark (default) | light
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+  // Theme state from global context
+  const { theme, setTheme } = useTheme()
+
   
   // API key state
   const [apiKeyInput, setApiKeyInput] = useState('')
@@ -183,14 +186,7 @@ export default function Dashboard() {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [chatMessages])
 
-  // Sync theme class to document element
-  useEffect(() => {
-    if (theme === 'light') {
-      document.documentElement.classList.remove('dark')
-    } else {
-      document.documentElement.classList.add('dark')
-    }
-  }, [theme])
+
 
   // Fetch API key status
   const fetchApiKeyStatus = async () => {
