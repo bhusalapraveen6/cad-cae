@@ -33,7 +33,7 @@ try:
     from app.geometry_analysis.feature_extractor import extract_features
     from app.geometry_analysis.suggestion_engine import suggest_analyses
     from app.workers.inline_runner import run_analysis_inline
-    from app.chatbot.claude_client import stream_chat_response
+    from app.chatbot.gemini_client import stream_chat_response
     STANDALONE_AVAILABLE = True
 except Exception as e:
     STANDALONE_AVAILABLE = False
@@ -1071,11 +1071,14 @@ if st.session_state.active_tab == "📐 Geometry Analysis":
                 
                 with st.spinner("Parsing and extracting geometric features..."):
                     if st.session_state.op_mode == "Standalone" and STANDALONE_AVAILABLE:
-                        project_id = local_upload_cad(file_bytes, filename, proj_name_input, st.session_state.user_id)
-                        st.session_state.active_project_id = project_id
-                        st.success("CAD parsed and loaded successfully in Standalone mode!")
-                        st.session_state.active_tab = "💻 Simulation Setup"
-                        st.rerun()
+                        try:
+                            project_id = local_upload_cad(file_bytes, filename, proj_name_input, st.session_state.user_id)
+                            st.session_state.active_project_id = project_id
+                            st.success("CAD parsed and loaded successfully in Standalone mode!")
+                            st.session_state.active_tab = "💻 Simulation Setup"
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to process CAD file: {e}")
                     elif st.session_state.op_mode == "API Client":
                         files = {"file": (filename, file_bytes)}
                         data = {"project_name": proj_name_input}
