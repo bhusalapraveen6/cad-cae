@@ -209,46 +209,12 @@ def setup_database():
 db_ready = setup_database()
 
 # ── Session State Setup ───────────────────────────────────────────────────────
-if "api_url" not in st.session_state:
-    st.session_state.api_url = "http://127.0.0.1:8000/api"
+st.session_state.op_mode = "Standalone"
 
-if "op_mode" not in st.session_state:
-    # Auto-detect if API is reachable
-    is_api_alive = False
-    try:
-        import httpx
-        res = httpx.get(f"{st.session_state.api_url.rstrip('/')}/health", timeout=1.0)
-        if res.status_code == 200:
-            is_api_alive = True
-    except Exception:
-        pass
-    
-    if is_api_alive:
-        st.session_state.op_mode = "API Client"
-    elif STANDALONE_AVAILABLE:
-        st.session_state.op_mode = "Standalone"
-    else:
-        st.session_state.op_mode = "API Client"
-
-if st.session_state.get("user") != "default_user" or st.session_state.get("token") is None:
+if st.session_state.get("user") != "default_user" or st.session_state.get("token") is not None:
     st.session_state.user = "default_user"
     st.session_state.user_id = "default_user_id"
     st.session_state.token = None
-
-# Auto-login default_user for backend database scoping
-if st.session_state.op_mode == "API Client" and st.session_state.token is None:
-    try:
-        import httpx
-        # Attempt signup
-        httpx.post(f"{st.session_state.api_url}/auth/signup", json={"username": "default_user", "password": "DefaultPassword123!"}, timeout=2.0)
-        # Attempt login
-        res = httpx.post(f"{st.session_state.api_url}/auth/login", json={"username": "default_user", "password": "DefaultPassword123!"}, timeout=2.0)
-        if res.status_code == 200:
-            data = res.json()
-            st.session_state.token = data.get("token")
-            st.session_state.user_id = data.get("user_id")
-    except Exception:
-        pass
 
 if "active_project_id" not in st.session_state:
     st.session_state.active_project_id = None
@@ -1011,50 +977,7 @@ with st.sidebar:
             else:
                 st.warning("Please enter a key first.")
 
-    st.write("---")
-    st.subheader("🔌 Connection Mode")
-    
-    op_mode_options = ["API Client"]
-    if STANDALONE_AVAILABLE:
-        op_mode_options.append("Standalone")
-        
-    selected_op_mode = st.selectbox(
-        "Operation Mode",
-        options=op_mode_options,
-        index=op_mode_options.index(st.session_state.op_mode) if st.session_state.op_mode in op_mode_options else 0,
-        help="API Client mode connects to a separate FastAPI backend server. Standalone mode runs the database and solvers inline within the Streamlit process (mock mode recommended)."
-    )
-    
-    if selected_op_mode != st.session_state.op_mode:
-        st.session_state.op_mode = selected_op_mode
-        st.session_state.token = None
-        st.session_state.active_project_id = None
-        st.session_state.active_job_id = None
-        st.rerun()
-        
-    if st.session_state.op_mode == "API Client":
-        api_url_input = st.text_input("Backend API URL", value=st.session_state.api_url)
-        if api_url_input != st.session_state.api_url:
-            st.session_state.api_url = api_url_input
-            st.session_state.token = None
-            st.rerun()
-            
-        try:
-            import httpx
-            res = httpx.get(f"{st.session_state.api_url.rstrip('/')}/health", timeout=1.0)
-            if res.status_code == 200:
-                st.markdown("🟢 **API Status: Connected**")
-            else:
-                st.markdown(f"🟡 **API Status: Error ({res.status_code})**")
-        except Exception:
-            st.markdown("🔴 **API Status: Offline**")
-            if STANDALONE_AVAILABLE:
-                st.info("Tip: Switch to **Standalone** mode above to run local mock analyses.")
-    else:
-        st.markdown("🟢 **Standalone Mode Active**")
-        st.markdown("ℹ️ *Running inline DB & mock solvers*")
 
-    st.write("---")
     st.subheader("🎨 Customize Interface")
     theme_choice = st.selectbox(
         "Theme Mode",
