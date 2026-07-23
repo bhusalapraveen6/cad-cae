@@ -324,6 +324,97 @@ export const refineMesh = async (
   return data
 }
 
+export interface MeshOperationResponse {
+  success: boolean
+  element_count: number
+  node_count: number
+  mesh_quality: number
+  mesh_quality_metrics: Record<string, any>
+}
+
+export const meshDensity = async (
+  projectId: string,
+  bboxMin: number[],
+  bboxMax: number[],
+  targetSize: number
+): Promise<MeshOperationResponse> => {
+  const { data } = await api.post(`/projects/${projectId}/mesh/density`, {
+    bbox_min: bboxMin,
+    bbox_max: bboxMax,
+    target_size: targetSize,
+  })
+  return data
+}
+
+export const meshMove = async (
+  projectId: string,
+  vertexIndices: number[],
+  delta: number[],
+  radius?: number
+): Promise<MeshOperationResponse> => {
+  const { data } = await api.post(`/projects/${projectId}/mesh/move`, {
+    vertex_indices: vertexIndices,
+    delta,
+    radius,
+  })
+  return data
+}
+
+export const meshSplit = async (
+  projectId: string,
+  faceIndex?: number,
+  vStart?: number,
+  vEnd?: number
+): Promise<MeshOperationResponse> => {
+  const { data } = await api.post(`/projects/${projectId}/mesh/split`, {
+    face_index: faceIndex,
+    v_start: vStart,
+    v_end: vEnd,
+  })
+  return data
+}
+
+export const meshReplace = async (
+  projectId: string,
+  patchFaceIndices: number[],
+  targetSize: number
+): Promise<MeshOperationResponse> => {
+  const { data } = await api.post(`/projects/${projectId}/mesh/replace`, {
+    patch_face_indices: patchFaceIndices,
+    target_size: targetSize,
+  })
+  return data
+}
+
+export const meshSmooth = async (
+  projectId: string,
+  iterations: number,
+  lambdaParam: number,
+  pinBoundary: boolean,
+  pinSharp: boolean,
+  sharpThresholdDeg: number
+): Promise<MeshOperationResponse> => {
+  const { data } = await api.post(`/projects/${projectId}/mesh/smooth`, {
+    iterations,
+    lambda_param: lambdaParam,
+    pin_boundary: pinBoundary,
+    pin_sharp: pinSharp,
+    sharp_threshold_deg: sharpThresholdDeg,
+  })
+  return data
+}
+
+export const meshRebuild = async (
+  projectId: string,
+  globalElementSize: number
+): Promise<MeshOperationResponse> => {
+  const { data } = await api.post(`/projects/${projectId}/mesh/rebuild`, {
+    global_element_size: globalElementSize,
+  })
+  return data
+}
+
+
 export const uploadReportImage = async (
   jobId: string,
   imageData: string,

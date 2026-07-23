@@ -181,6 +181,205 @@ export default function Dashboard() {
   const [isRefining, setIsRefining] = useState<boolean>(false)
   const [meshQualityMetrics, setMeshQualityMetrics] = useState<Record<string, any> | null>(null)
 
+  // Local mesh editing states
+  const [meshOpTab, setMeshOpTab] = useState<'none' | 'density' | 'move' | 'split' | 'replace' | 'smooth' | 'rebuild'>('none')
+  const [bboxMinStr, setBboxMinStr] = useState<string>('-10,-10,-10')
+  const [bboxMaxStr, setBboxMaxStr] = useState<string>('10,10,10')
+  const [densityTargetSize, setDensityTargetSize] = useState<number>(2.0)
+  
+  const [moveVertIndicesStr, setMoveVertIndicesStr] = useState<string>('0')
+  const [moveDeltaStr, setMoveDeltaStr] = useState<string>('1.0,0.0,0.0')
+  const [moveRadius, setMoveRadius] = useState<string>('')
+  
+  const [splitFaceIdxStr, setSplitFaceIdxStr] = useState<string>('0')
+  const [splitVStartStr, setSplitVStartStr] = useState<string>('0')
+  const [splitVEndStr, setSplitVEndStr] = useState<string>('1')
+  
+  const [replaceFaceIndicesStr, setReplaceFaceIndicesStr] = useState<string>('0,1,2')
+  const [replaceTargetSize, setReplaceTargetSize] = useState<number>(2.0)
+  
+  const [smoothIterations, setSmoothIterations] = useState<number>(10)
+  const [smoothLambda, setSmoothLambda] = useState<number>(0.5)
+  const [smoothPinBoundary, setSmoothPinBoundary] = useState<boolean>(true)
+  const [smoothPinSharp, setSmoothPinSharp] = useState<boolean>(true)
+  const [smoothSharpThreshold, setSmoothSharpThreshold] = useState<number>(30.0)
+
+  const [rebuildGlobalSize, setRebuildGlobalSize] = useState<number>(5.0)
+  const [isEditingMesh, setIsEditingMesh] = useState<boolean>(false)
+
+  const handleMeshDensity = async () => {
+    if (!activeProject) return
+    setIsEditingMesh(true)
+    try {
+      const min = bboxMinStr.split(',').map(Number)
+      const max = bboxMaxStr.split(',').map(Number)
+      if (min.length !== 3 || max.length !== 3 || min.some(isNaN) || max.some(isNaN)) {
+        store.addToast('error', 'Invalid bounding box coordinates format (expected x,y,z)')
+        return
+      }
+      const res = await meshDensity(activeProject.id, min, max, densityTargetSize)
+      if (res.success) {
+        setActiveGeometry((prev) => prev ? {
+          ...prev,
+          element_count: res.element_count,
+          node_count: res.node_count,
+          mesh_quality: res.mesh_quality
+        } : null)
+        setMeshQualityMetrics(res.mesh_quality_metrics)
+        store.addToast('success', 'Mesh local density refined successfully!')
+      }
+    } catch (e: any) {
+      store.addToast('error', e.response?.data?.detail || 'Density operation failed.')
+    } finally {
+      setIsEditingMesh(false)
+    }
+  }
+
+  const handleMeshMove = async () => {
+    if (!activeProject) return
+    setIsEditingMesh(true)
+    try {
+      const indices = moveVertIndicesStr.split(',').map(Number).filter(x => !isNaN(x))
+      const delta = moveDeltaStr.split(',').map(Number)
+      if (delta.length !== 3 || delta.some(isNaN)) {
+        store.addToast('error', 'Invalid delta format (expected dx,dy,dz)')
+        return
+      }
+      const rad = moveRadius ? parseFloat(moveRadius) : undefined
+      const res = await meshMove(activeProject.id, indices, delta, rad)
+      if (res.success) {
+        setActiveGeometry((prev) => prev ? {
+          ...prev,
+          element_count: res.element_count,
+          node_count: res.node_count,
+          mesh_quality: res.mesh_quality
+        } : null)
+        setMeshQualityMetrics(res.mesh_quality_metrics)
+        store.addToast('success', 'Mesh vertices moved successfully!')
+      }
+    } catch (e: any) {
+      store.addToast('error', e.response?.data?.detail || 'Move operation failed.')
+    } finally {
+      setIsEditingMesh(false)
+    }
+  }
+
+  const handleMeshSplit = async (type: 'face' | 'edge') => {
+    if (!activeProject) return
+    setIsEditingMesh(true)
+    try {
+      let res
+      if (type === 'face') {
+        const faceIdx = parseInt(splitFaceIdxStr)
+        if (isNaN(faceIdx)) {
+          store.addToast('error', 'Invalid face index')
+          return
+        }
+        res = await meshSplit(activeProject.id, faceIdx, undefined, undefined)
+      } else {
+        const start = parseInt(splitVStartStr)
+        const end = parseInt(splitVEndStr)
+        if (isNaN(start) || isNaN(end)) {
+          store.addToast('error', 'Invalid edge vertex indices')
+          return
+        }
+        res = await meshSplit(activeProject.id, undefined, start, end)
+      }
+      if (res.success) {
+        setActiveGeometry((prev) => prev ? {
+          ...prev,
+          element_count: res.element_count,
+          node_count: res.node_count,
+          mesh_quality: res.mesh_quality
+        } : null)
+        setMeshQualityMetrics(res.mesh_quality_metrics)
+        store.addToast('success', 'Mesh element split successfully!')
+      }
+    } catch (e: any) {
+      store.addToast('error', e.response?.data?.detail || 'Split operation failed.')
+    } finally {
+      setIsEditingMesh(false)
+    }
+  }
+
+  const handleMeshReplace = async () => {
+    if (!activeProject) return
+    setIsEditingMesh(true)
+    try {
+      const faces = replaceFaceIndicesStr.split(',').map(Number).filter(x => !isNaN(x))
+      if (faces.length === 0) {
+        store.addToast('error', 'No patch faces provided')
+        return
+      }
+      const res = await meshReplace(activeProject.id, faces, replaceTargetSize)
+      if (res.success) {
+        setActiveGeometry((prev) => prev ? {
+          ...prev,
+          element_count: res.element_count,
+          node_count: res.node_count,
+          mesh_quality: res.mesh_quality
+        } : null)
+        setMeshQualityMetrics(res.mesh_quality_metrics)
+        store.addToast('success', 'Mesh sub-region replaced successfully!')
+      }
+    } catch (e: any) {
+      store.addToast('error', e.response?.data?.detail || 'Replace operation failed.')
+    } finally {
+      setIsEditingMesh(false)
+    }
+  }
+
+  const handleMeshSmooth = async () => {
+    if (!activeProject) return
+    setIsEditingMesh(true)
+    try {
+      const res = await meshSmooth(
+        activeProject.id,
+        smoothIterations,
+        smoothLambda,
+        smoothPinBoundary,
+        smoothPinSharp,
+        smoothSharpThreshold
+      )
+      if (res.success) {
+        setActiveGeometry((prev) => prev ? {
+          ...prev,
+          element_count: res.element_count,
+          node_count: res.node_count,
+          mesh_quality: res.mesh_quality
+        } : null)
+        setMeshQualityMetrics(res.mesh_quality_metrics)
+        store.addToast('success', 'Mesh smoothed successfully!')
+      }
+    } catch (e: any) {
+      store.addToast('error', e.response?.data?.detail || 'Smoothing operation failed.')
+    } finally {
+      setIsEditingMesh(false)
+    }
+  }
+
+  const handleMeshRebuild = async () => {
+    if (!activeProject) return
+    setIsEditingMesh(true)
+    try {
+      const res = await meshRebuild(activeProject.id, rebuildGlobalSize)
+      if (res.success) {
+        setActiveGeometry((prev) => prev ? {
+          ...prev,
+          element_count: res.element_count,
+          node_count: res.node_count,
+          mesh_quality: res.mesh_quality
+        } : null)
+        setMeshQualityMetrics(res.mesh_quality_metrics)
+        store.addToast('success', 'Mesh rebuilt and reset successfully!')
+      }
+    } catch (e: any) {
+      store.addToast('error', e.response?.data?.detail || 'Rebuild operation failed.')
+    } finally {
+      setIsEditingMesh(false)
+    }
+  }
+
   // Load API Key and projects on mount
   useEffect(() => {
     fetchApiKeyStatus()
@@ -1102,6 +1301,343 @@ export default function Dashboard() {
                       </div>
                     )}
                   </div>
+                </div>
+
+                <div className="border-t border-navy-850/80 pt-5 mt-6 space-y-4">
+                  <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                    <span>🛠️ Local Mesh Editing Toolset</span>
+                  </h4>
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {[
+                      { id: 'none', label: 'None' },
+                      { id: 'density', label: '1. Regional Density' },
+                      { id: 'move', label: '2. Move Node' },
+                      { id: 'split', label: '3. Split Face/Edge' },
+                      { id: 'replace', label: '4. Remesh Patch' },
+                      { id: 'smooth', label: '5. Smooth Laplacian' },
+                      { id: 'rebuild', label: '6. Rebuild Mesh' }
+                    ].map((tab) => (
+                      <button
+                        key={tab.id}
+                        onClick={() => setMeshOpTab(tab.id as any)}
+                        className={`px-3 py-1.5 rounded text-[11px] font-semibold transition-all ${
+                          meshOpTab === tab.id
+                            ? 'bg-cyan-400 text-navy-950 font-bold shadow-md shadow-cyan-400/20'
+                            : 'bg-navy-950 hover:bg-navy-850 text-slate-400 border border-navy-800'
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {meshOpTab === 'density' && (
+                    <div className="bg-navy-900/40 p-4.5 rounded-card border border-navy-800 space-y-4 max-w-lg">
+                      <h5 className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider">Regional Element Size Control</h5>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-1">Bounding Box Min [X,Y,Z] (mm)</label>
+                          <input
+                            type="text"
+                            value={bboxMinStr}
+                            onChange={(e) => setBboxMinStr(e.target.value)}
+                            placeholder="-10,-10,-10"
+                            className="w-full bg-navy-950 border border-navy-800 rounded px-2.5 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-1">Bounding Box Max [X,Y,Z] (mm)</label>
+                          <input
+                            type="text"
+                            value={bboxMaxStr}
+                            onChange={(e) => setBboxMaxStr(e.target.value)}
+                            placeholder="10,10,10"
+                            className="w-full bg-navy-950 border border-navy-800 rounded px-2.5 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400"
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] text-slate-400 flex justify-between">
+                          <span>Target Regional Element Size:</span>
+                          <span className="font-mono text-cyan-400 font-bold">{densityTargetSize.toFixed(1)} mm</span>
+                        </label>
+                        <input
+                          type="range"
+                          min="0.2"
+                          max="10.0"
+                          step="0.1"
+                          value={densityTargetSize}
+                          onChange={(e) => setDensityTargetSize(parseFloat(e.target.value))}
+                          className="w-full h-1 bg-navy-850 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                        />
+                      </div>
+                      <button
+                        onClick={handleMeshDensity}
+                        disabled={isEditingMesh || !activeProject}
+                        className="w-full py-2 bg-cyan-400 hover:bg-cyan-300 text-navy-950 font-bold text-xs rounded transition-all disabled:opacity-50"
+                      >
+                        {isEditingMesh ? '🔄 Refining Local Density...' : 'Apply Density Subdivision'}
+                      </button>
+                    </div>
+                  )}
+
+                  {meshOpTab === 'move' && (
+                    <div className="bg-navy-900/40 p-4.5 rounded-card border border-navy-800 space-y-4 max-w-lg">
+                      <h5 className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider">Neighbor-Aware Node Move</h5>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-1">Vertex Indices (comma-separated)</label>
+                          <input
+                            type="text"
+                            value={moveVertIndicesStr}
+                            onChange={(e) => setMoveVertIndicesStr(e.target.value)}
+                            placeholder="0,1"
+                            className="w-full bg-navy-950 border border-navy-800 rounded px-2.5 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-1">Displacement Vector [dX,dY,dZ] (mm)</label>
+                          <input
+                            type="text"
+                            value={moveDeltaStr}
+                            onChange={(e) => setMoveDeltaStr(e.target.value)}
+                            placeholder="1.0,0.0,0.0"
+                            className="w-full bg-navy-950 border border-navy-800 rounded px-2.5 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1">Influence Radius (mm) — Blank for topological graph-ring falloff</label>
+                        <input
+                          type="text"
+                          value={moveRadius}
+                          onChange={(e) => setMoveRadius(e.target.value)}
+                          placeholder="e.g. 5.0"
+                          className="w-full bg-navy-950 border border-navy-800 rounded px-2.5 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+                      <button
+                        onClick={handleMeshMove}
+                        disabled={isEditingMesh || !activeProject}
+                        className="w-full py-2 bg-cyan-400 hover:bg-cyan-300 text-navy-950 font-bold text-xs rounded transition-all disabled:opacity-50"
+                      >
+                        {isEditingMesh ? '🔄 Moving Nodes...' : 'Apply Neighbor-Aware Displacement'}
+                      </button>
+                    </div>
+                  )}
+
+                  {meshOpTab === 'split' && (
+                    <div className="bg-navy-900/40 p-4.5 rounded-card border border-navy-800 space-y-4 max-w-lg">
+                      <h5 className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider">Centroid or Edge Split</h5>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-navy-950/50 p-3 rounded border border-navy-800 space-y-2 flex flex-col justify-between">
+                          <div>
+                            <span className="block text-[10px] font-semibold text-slate-400">1. Split Face Centroid (1-to-3)</span>
+                            <label className="block text-[9px] text-slate-500 mt-1">Face Index</label>
+                            <input
+                              type="text"
+                              value={splitFaceIdxStr}
+                              onChange={(e) => setSplitFaceIdxStr(e.target.value)}
+                              placeholder="0"
+                              className="w-full bg-navy-950 border border-navy-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-cyan-400"
+                            />
+                          </div>
+                          <button
+                            onClick={() => handleMeshSplit('face')}
+                            disabled={isEditingMesh || !activeProject}
+                            className="w-full mt-2 py-1.5 bg-cyan-400 hover:bg-cyan-300 text-navy-950 font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                          >
+                            Split Face Centroid
+                          </button>
+                        </div>
+                        
+                        <div className="bg-navy-950/50 p-3 rounded border border-navy-800 space-y-2 flex flex-col justify-between">
+                          <div>
+                            <span className="block text-[10px] font-semibold text-slate-400">2. Split Edge Midpoint (1-to-2)</span>
+                            <div className="grid grid-cols-2 gap-2 mt-1">
+                              <div>
+                                <label className="block text-[9px] text-slate-500">Start V-Idx</label>
+                                <input
+                                  type="text"
+                                  value={splitVStartStr}
+                                  onChange={(e) => setSplitVStartStr(e.target.value)}
+                                  placeholder="0"
+                                  className="w-full bg-navy-950 border border-navy-800 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-cyan-400"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[9px] text-slate-500">End V-Idx</label>
+                                <input
+                                  type="text"
+                                  value={splitVEndStr}
+                                  onChange={(e) => setSplitVEndStr(e.target.value)}
+                                  placeholder="1"
+                                  className="w-full bg-navy-950 border border-navy-800 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-cyan-400"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleMeshSplit('edge')}
+                            disabled={isEditingMesh || !activeProject}
+                            className="w-full mt-2 py-1.5 bg-cyan-400 hover:bg-cyan-300 text-navy-950 font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                          >
+                            Split Edge Midpoint
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {meshOpTab === 'replace' && (
+                    <div className="bg-navy-900/40 p-4.5 rounded-card border border-navy-800 space-y-4 max-w-lg">
+                      <h5 className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider">Sub-region Remesh Patch</h5>
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1">Face Indices to Replace (comma-separated list)</label>
+                        <input
+                          type="text"
+                          value={replaceFaceIndicesStr}
+                          onChange={(e) => setReplaceFaceIndicesStr(e.target.value)}
+                          placeholder="0,1,2,3,4"
+                          className="w-full bg-navy-950 border border-navy-800 rounded px-2.5 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] text-slate-400 flex justify-between">
+                          <span>Target Patch Element Size:</span>
+                          <span className="font-mono text-cyan-400 font-bold">{replaceTargetSize.toFixed(1)} mm</span>
+                        </label>
+                        <input
+                          type="range"
+                          min="0.2"
+                          max="10.0"
+                          step="0.1"
+                          value={replaceTargetSize}
+                          onChange={(e) => setReplaceTargetSize(parseFloat(e.target.value))}
+                          className="w-full h-1 bg-navy-850 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                        />
+                      </div>
+                      <button
+                        onClick={handleMeshReplace}
+                        disabled={isEditingMesh || !activeProject}
+                        className="w-full py-2 bg-cyan-400 hover:bg-cyan-300 text-navy-950 font-bold text-xs rounded transition-all disabled:opacity-50"
+                      >
+                        {isEditingMesh ? '🔄 Rebuilding Patch...' : 'Replace Sub-region Patch'}
+                      </button>
+                    </div>
+                  )}
+
+                  {meshOpTab === 'smooth' && (
+                    <div className="bg-navy-900/40 p-4.5 rounded-card border border-navy-800 space-y-4 max-w-lg">
+                      <h5 className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider">Laplacian Smoothing</h5>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <label className="text-[10px] text-slate-400 flex justify-between">
+                            <span>Iterations:</span>
+                            <span className="font-mono text-cyan-400 font-bold">{smoothIterations}</span>
+                          </label>
+                          <input
+                            type="range"
+                            min="1"
+                            max="50"
+                            step="1"
+                            value={smoothIterations}
+                            onChange={(e) => setSmoothIterations(parseInt(e.target.value))}
+                            className="w-full h-1 bg-navy-850 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] text-slate-400 flex justify-between">
+                            <span>Lambda (damping):</span>
+                            <span className="font-mono text-cyan-400 font-bold">{smoothLambda.toFixed(2)}</span>
+                          </label>
+                          <input
+                            type="range"
+                            min="0.05"
+                            max="1.0"
+                            step="0.05"
+                            value={smoothLambda}
+                            onChange={(e) => setSmoothLambda(parseFloat(e.target.value))}
+                            className="w-full h-1 bg-navy-850 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex gap-4 pt-2">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id="smoothPinBoundary"
+                            checked={smoothPinBoundary}
+                            onChange={(e) => setSmoothPinBoundary(e.target.checked)}
+                            className="rounded border-navy-700 bg-navy-950 text-cyan-550 focus:ring-cyan-500"
+                          />
+                          <label htmlFor="smoothPinBoundary" className="text-[10px] text-slate-300 select-none cursor-pointer">Pin Boundary Vertices</label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id="smoothPinSharp"
+                            checked={smoothPinSharp}
+                            onChange={(e) => setSmoothPinSharp(e.target.checked)}
+                            className="rounded border-navy-700 bg-navy-950 text-cyan-550 focus:ring-cyan-500"
+                          />
+                          <label htmlFor="smoothPinSharp" className="text-[10px] text-slate-300 select-none cursor-pointer">Pin Sharp Feature Vertices</label>
+                        </div>
+                      </div>
+                      {smoothPinSharp && (
+                        <div className="space-y-2">
+                          <label className="text-[10px] text-slate-400 flex justify-between">
+                            <span>Sharp Dihedral Angle Threshold:</span>
+                            <span className="font-mono text-cyan-400 font-bold">{smoothSharpThreshold.toFixed(1)}°</span>
+                          </label>
+                          <input
+                            type="range"
+                            min="5.0"
+                            max="90.0"
+                            step="5.0"
+                            value={smoothSharpThreshold}
+                            onChange={(e) => setSmoothSharpThreshold(parseFloat(e.target.value))}
+                            className="w-full h-1 bg-navy-850 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                          />
+                        </div>
+                      )}
+                      <button
+                        onClick={handleMeshSmooth}
+                        disabled={isEditingMesh || !activeProject}
+                        className="w-full py-2 bg-cyan-400 hover:bg-cyan-300 text-navy-950 font-bold text-xs rounded transition-all disabled:opacity-50"
+                      >
+                        {isEditingMesh ? '🔄 Smoothing Mesh...' : 'Apply Laplacian Smoothing'}
+                      </button>
+                    </div>
+                  )}
+
+                  {meshOpTab === 'rebuild' && (
+                    <div className="bg-navy-900/40 p-4.5 rounded-card border border-navy-800 space-y-4 max-w-lg">
+                      <h5 className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider">Reset & Remesh Everything</h5>
+                      <div className="space-y-2">
+                        <label className="text-[10px] text-slate-400 flex justify-between">
+                          <span>Global Element Size:</span>
+                          <span className="font-mono text-cyan-400 font-bold">{rebuildGlobalSize.toFixed(1)} mm</span>
+                        </label>
+                        <input
+                          type="range"
+                          min="0.5"
+                          max="20.0"
+                          step="0.5"
+                          value={rebuildGlobalSize}
+                          onChange={(e) => setRebuildGlobalSize(parseFloat(e.target.value))}
+                          className="w-full h-1 bg-navy-850 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                        />
+                      </div>
+                      <button
+                        onClick={handleMeshRebuild}
+                        disabled={isEditingMesh || !activeProject}
+                        className="w-full py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded transition-all disabled:opacity-50"
+                      >
+                        {isEditingMesh ? '🔄 Rebuilding Whole Mesh...' : 'Reset & Rebuild Mesh'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </section>
 

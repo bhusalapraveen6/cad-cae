@@ -327,10 +327,40 @@ async def get_suggestions(
 
 
 from pydantic import BaseModel
+from typing import List, Optional
 
 class MeshRefineRequest(BaseModel):
     global_element_size: float
     refine_curvature: bool
+
+class MeshDensityRequest(BaseModel):
+    bbox_min: List[float]
+    bbox_max: List[float]
+    target_size: float
+
+class MeshMoveRequest(BaseModel):
+    vertex_indices: List[int]
+    delta: List[float]
+    radius: Optional[float] = None
+
+class MeshSplitRequest(BaseModel):
+    face_index: Optional[int] = None
+    v_start: Optional[int] = None
+    v_end: Optional[int] = None
+
+class MeshReplaceRequest(BaseModel):
+    patch_face_indices: List[int]
+    target_size: float
+
+class MeshSmoothRequest(BaseModel):
+    iterations: int = 10
+    lambda_param: float = 0.5
+    pin_boundary: bool = True
+    pin_sharp: bool = True
+    sharp_threshold_deg: float = 30.0
+
+class MeshRebuildRequest(BaseModel):
+    global_element_size: float
 
 
 @projects_router.get("/{project_id}/mesh")
@@ -352,6 +382,23 @@ async def get_project_mesh(
     g = (await db.execute(
         select(M.GeometryFeatures).where(M.GeometryFeatures.project_id == project_id)
     )).scalar_one_or_none()
+
+    # If there is an edited mesh, and global_element_size is not explicitly passed, load it
+    edited_path = path.parent / f"{project_id}_edited.stl"
+    if edited_path.exists() and global_element_size is None:
+        try:
+            import trimesh
+            mesh = trimesh.load(str(edited_path), force="mesh")
+            verts = mesh.vertices.tolist() if mesh.vertices is not None else []
+            faces = mesh.faces.tolist() if mesh.faces is not None else []
+            return {
+                "vertices": verts,
+                "faces": faces,
+                "bbox": mesh.bounding_box.extents.tolist() if mesh.vertices.size > 0 else [0.0, 0.0, 0.0],
+                "center_of_mass": mesh.center_mass.tolist() if mesh.vertices.size > 0 else [0.0, 0.0, 0.0]
+            }
+        except Exception as e:
+            logger.warning("Failed to load edited mesh, falling back to CAD file", error=str(e))
 
     element_size = global_element_size
     if element_size is None and g and g.raw_features:
@@ -402,6 +449,15 @@ async def refine_project_mesh(
     if not path.exists():
         raise HTTPException(404, "CAD file not found on disk")
         
+    # Delete the edited file on global refine to reset
+    edited_path = path.parent / f"{project_id}_edited.stl"
+    if edited_path.exists():
+        try:
+            import os
+            os.remove(edited_path)
+        except Exception:
+            pass
+
     try:
         from app.cad_import.parser import parse_cad_file
         from app.geometry_analysis.feature_extractor import extract_features
@@ -439,6 +495,217 @@ async def refine_project_mesh(
         }
     except Exception as e:
         raise HTTPException(500, detail=f"Mesh refinement failed: {e}")
+
+
+# Helpers for mesh-editing endpoints
+async def _load_current_mesh(p: M.Project, g: M.GeometryFeatures) -> tuple[np.ndarray, np.ndarray]:
+    from pathlib import Path
+    import trimesh
+    from app.cad_import.parser import parse_cad_file
+    import numpy as np
+    
+    path = Path(p.cad_file_path)
+    edited_path = path.parent / f"{p.id}_edited.stl"
+    
+    if edited_path.exists():
+        mesh = trimesh.load(str(edited_path), force="mesh")
+        return np.array(mesh.vertices, dtype=np.float32), np.array(mesh.faces, dtype=np.int32)
+        
+    element_size = 5.0
+    refine_curv = False
+    if g and g.raw_features and g.raw_features.get("mesh_settings"):
+        element_size = g.raw_features["mesh_settings"].get("global_element_size", 5.0)
+        refine_curv = g.raw_features["mesh_settings"].get("refine_curvature", False)
+        
+    deflection = element_size
+    if refine_curv:
+        deflection = deflection * 0.5
+        
+    geom_data = await parse_cad_file(path, deflection=deflection)
+    return geom_data.vertices, geom_data.faces
+
+
+async def _update_mesh_and_quality(
+    p: M.Project,
+    g: M.GeometryFeatures,
+    db: AsyncSession,
+    new_vertices: np.ndarray,
+    new_faces: np.ndarray
+) -> dict:
+    from pathlib import Path
+    import trimesh
+    from app.geometry_analysis.mesh_quality import compute_mesh_quality
+    from sqlalchemy.orm.attributes import flag_modified
+    
+    path = Path(p.cad_file_path)
+    edited_path = path.parent / f"{p.id}_edited.stl"
+    
+    edited_mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces, process=False)
+    edited_mesh.export(str(edited_path))
+    
+    quality_data = compute_mesh_quality(new_vertices, new_faces)
+    
+    g.element_count = len(new_faces)
+    g.node_count = len(new_vertices)
+    g.mesh_quality = quality_data["overall_quality_score"]
+    
+    raw = g.raw_features or {}
+    raw["mesh_quality_metrics"] = quality_data
+    g.raw_features = raw
+    flag_modified(g, "raw_features")
+    
+    await db.commit()
+    
+    return {
+        "success": True,
+        "element_count": g.element_count,
+        "node_count": g.node_count,
+        "mesh_quality": g.mesh_quality,
+        "mesh_quality_metrics": raw["mesh_quality_metrics"]
+    }
+
+
+@projects_router.post("/{project_id}/mesh/density")
+async def mesh_density(
+    project_id: str,
+    body: MeshDensityRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: M.User = Depends(get_current_user),
+):
+    p = await _get_project_verified(project_id, db, current_user.id)
+    g = (await db.execute(
+        select(M.GeometryFeatures).where(M.GeometryFeatures.project_id == project_id)
+    )).scalar_one_or_none()
+    if not g:
+        raise HTTPException(404, "Geometry features not found")
+        
+    try:
+        from app.meshing.density import local_density_refine
+        vertices, faces = await _load_current_mesh(p, g)
+        new_vertices, new_faces = local_density_refine(
+            vertices, faces, body.bbox_min, body.bbox_max, body.target_size
+        )
+        return await _update_mesh_and_quality(p, g, db, new_vertices, new_faces)
+    except Exception as e:
+        raise HTTPException(500, detail=f"Mesh density operation failed: {e}")
+
+
+@projects_router.post("/{project_id}/mesh/move")
+async def mesh_move(
+    project_id: str,
+    body: MeshMoveRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: M.User = Depends(get_current_user),
+):
+    p = await _get_project_verified(project_id, db, current_user.id)
+    g = (await db.execute(
+        select(M.GeometryFeatures).where(M.GeometryFeatures.project_id == project_id)
+    )).scalar_one_or_none()
+    if not g:
+        raise HTTPException(404, "Geometry features not found")
+        
+    try:
+        from app.meshing.edit_ops import move_vertices
+        vertices, faces = await _load_current_mesh(p, g)
+        new_vertices, new_faces = move_vertices(
+            vertices, faces, body.vertex_indices, body.delta, body.radius
+        )
+        return await _update_mesh_and_quality(p, g, db, new_vertices, new_faces)
+    except Exception as e:
+        raise HTTPException(500, detail=f"Mesh move operation failed: {e}")
+
+
+@projects_router.post("/{project_id}/mesh/split")
+async def mesh_split(
+    project_id: str,
+    body: MeshSplitRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: M.User = Depends(get_current_user),
+):
+    p = await _get_project_verified(project_id, db, current_user.id)
+    g = (await db.execute(
+        select(M.GeometryFeatures).where(M.GeometryFeatures.project_id == project_id)
+    )).scalar_one_or_none()
+    if not g:
+        raise HTTPException(404, "Geometry features not found")
+        
+    try:
+        from app.meshing.edit_ops import split_face_centroid, split_edge_midpoint
+        vertices, faces = await _load_current_mesh(p, g)
+        if body.face_index is not None:
+            new_vertices, new_faces = split_face_centroid(vertices, faces, body.face_index)
+        elif body.v_start is not None and body.v_end is not None:
+            new_vertices, new_faces = split_edge_midpoint(vertices, faces, body.v_start, body.v_end)
+        else:
+            raise HTTPException(400, "Either face_index or both v_start and v_end must be provided")
+            
+        return await _update_mesh_and_quality(p, g, db, new_vertices, new_faces)
+    except Exception as e:
+        raise HTTPException(500, detail=f"Mesh split operation failed: {e}")
+
+
+@projects_router.post("/{project_id}/mesh/replace")
+async def mesh_replace(
+    project_id: str,
+    body: MeshReplaceRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: M.User = Depends(get_current_user),
+):
+    p = await _get_project_verified(project_id, db, current_user.id)
+    g = (await db.execute(
+        select(M.GeometryFeatures).where(M.GeometryFeatures.project_id == project_id)
+    )).scalar_one_or_none()
+    if not g:
+        raise HTTPException(404, "Geometry features not found")
+        
+    try:
+        from app.meshing.edit_ops import replace_patch
+        vertices, faces = await _load_current_mesh(p, g)
+        new_vertices, new_faces = replace_patch(vertices, faces, body.patch_face_indices, body.target_size)
+        return await _update_mesh_and_quality(p, g, db, new_vertices, new_faces)
+    except Exception as e:
+        raise HTTPException(500, detail=f"Mesh replace operation failed: {e}")
+
+
+@projects_router.post("/{project_id}/mesh/smooth")
+async def mesh_smooth(
+    project_id: str,
+    body: MeshSmoothRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: M.User = Depends(get_current_user),
+):
+    p = await _get_project_verified(project_id, db, current_user.id)
+    g = (await db.execute(
+        select(M.GeometryFeatures).where(M.GeometryFeatures.project_id == project_id)
+    )).scalar_one_or_none()
+    if not g:
+        raise HTTPException(404, "Geometry features not found")
+        
+    try:
+        from app.meshing.smoothing import laplacian_smoothing
+        vertices, faces = await _load_current_mesh(p, g)
+        new_vertices, new_faces = laplacian_smoothing(
+            vertices, faces, body.iterations, body.lambda_param,
+            body.pin_boundary, body.pin_sharp, body.sharp_threshold_deg
+        )
+        return await _update_mesh_and_quality(p, g, db, new_vertices, new_faces)
+    except Exception as e:
+        raise HTTPException(500, detail=f"Mesh smoothing operation failed: {e}")
+
+
+@projects_router.post("/{project_id}/mesh/rebuild")
+async def mesh_rebuild(
+    project_id: str,
+    body: MeshRebuildRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: M.User = Depends(get_current_user),
+):
+    p = await _get_project_verified(project_id, db, current_user.id)
+    try:
+        from app.meshing.remesh import rebuild_mesh
+        return await rebuild_mesh(project_id, db, body.global_element_size)
+    except Exception as e:
+        raise HTTPException(500, detail=f"Mesh rebuild failed: {e}")
 
 
 

@@ -350,6 +350,108 @@ def local_upload_cad(file_bytes, filename, project_name, user_id=None):
 
 
 # ── Standalone Mode Database Wrappers ────────────────────────────────────────
+def run_standalone_mesh_op(project_id, op_name, **kwargs):
+    if not STANDALONE_AVAILABLE:
+        return False
+        
+    async def _run():
+        from app.database import get_db_context
+        from sqlalchemy import select
+        from app.models.db_models import Project, GeometryFeatures
+        from pathlib import Path
+        import trimesh
+        import numpy as np
+        from app.cad_import.parser import parse_cad_file
+        from app.geometry_analysis.mesh_quality import compute_mesh_quality
+        
+        async with get_db_context() as db:
+            p = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
+            g = (await db.execute(select(GeometryFeatures).where(GeometryFeatures.project_id == project_id))).scalar_one_or_none()
+            if not p or not g:
+                return False
+                
+            path = Path(p.cad_file_path)
+            edited_path = path.parent / f"{project_id}_edited.stl"
+            
+            # 1. Load current mesh
+            if edited_path.exists():
+                mesh = trimesh.load(str(edited_path), force="mesh")
+                vertices, faces = np.array(mesh.vertices, dtype=np.float32), np.array(mesh.faces, dtype=np.int32)
+            else:
+                element_size = 5.0
+                refine_curv = False
+                if g.raw_features and g.raw_features.get("mesh_settings"):
+                    element_size = g.raw_features["mesh_settings"].get("global_element_size", 5.0)
+                    refine_curv = g.raw_features["mesh_settings"].get("refine_curvature", False)
+                deflection = element_size
+                if refine_curv:
+                    deflection = deflection * 0.5
+                geom_data = await parse_cad_file(path, deflection=deflection)
+                vertices, faces = geom_data.vertices, geom_data.faces
+                
+            # 2. Run the operation
+            if op_name == "density":
+                from app.meshing.density import local_density_refine
+                new_vertices, new_faces = local_density_refine(
+                    vertices, faces, kwargs["bbox_min"], kwargs["bbox_max"], kwargs["target_size"]
+                )
+            elif op_name == "move":
+                from app.meshing.edit_ops import move_vertices
+                new_vertices, new_faces = move_vertices(
+                    vertices, faces, kwargs["vertex_indices"], kwargs["delta"], kwargs.get("radius")
+                )
+            elif op_name == "split":
+                from app.meshing.edit_ops import split_face_centroid, split_edge_midpoint
+                if kwargs.get("face_index") is not None:
+                    new_vertices, new_faces = split_face_centroid(vertices, faces, kwargs["face_index"])
+                else:
+                    new_vertices, new_faces = split_edge_midpoint(vertices, faces, kwargs["v_start"], kwargs["v_end"])
+            elif op_name == "replace":
+                from app.meshing.edit_ops import replace_patch
+                new_vertices, new_faces = replace_patch(
+                    vertices, faces, kwargs["patch_face_indices"], kwargs["target_size"]
+                )
+            elif op_name == "smooth":
+                from app.meshing.smoothing import laplacian_smoothing
+                new_vertices, new_faces = laplacian_smoothing(
+                    vertices, faces, kwargs["iterations"], kwargs["lambda_param"],
+                    kwargs["pin_boundary"], kwargs["pin_sharp"], kwargs["sharp_threshold_deg"]
+                )
+            else:
+                return False
+                
+            # 3. Export edited mesh
+            edited_mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces, process=False)
+            edited_mesh.export(str(edited_path))
+            
+            # 4. Compute quality & update DB
+            quality_data = compute_mesh_quality(new_vertices, new_faces)
+            g.element_count = len(new_faces)
+            g.node_count = len(new_vertices)
+            g.mesh_quality = quality_data["overall_quality_score"]
+            
+            raw = g.raw_features or {}
+            raw["mesh_quality_metrics"] = quality_data
+            g.raw_features = raw
+            
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(g, "raw_features")
+            await db.commit()
+            return True
+            
+    return run_async(_run())
+
+def run_standalone_rebuild(project_id, global_element_size):
+    if not STANDALONE_AVAILABLE:
+        return False
+    async def _run():
+        from app.database import get_db_context
+        async with get_db_context() as db:
+            from app.meshing.remesh import rebuild_mesh
+            await rebuild_mesh(project_id, db, global_element_size)
+            return True
+    return run_async(_run())
+
 def get_standalone_projects(user_id=None):
     async def _fetch():
         async with get_db_context() as db:
@@ -1134,17 +1236,24 @@ if st.session_state.active_tab == "📐 Geometry Analysis":
                 if st.session_state.op_mode == "Standalone" and STANDALONE_AVAILABLE:
                     try:
                         filepath = Path(active_project["cad_file_path"])
-                        # Read global size settings if present
-                        geo = active_project.get("geometry", {})
-                        element_size = geo.get("raw_features", {}).get("mesh_settings", {}).get("global_element_size", 5.0) if "raw_features" in geo else 5.0
-                        refine_curv = geo.get("raw_features", {}).get("mesh_settings", {}).get("refine_curvature", False) if "raw_features" in geo else False
-                        deflection = element_size
-                        if refine_curv:
-                            deflection = deflection * 0.5
-                        geom_data = run_async(parse_cad_file(filepath, deflection=deflection))
-                        if geom_data.vertices is not None:
-                            vertices = geom_data.vertices.tolist()
-                            faces = geom_data.faces.tolist()
+                        edited_path = filepath.parent / f"{active_project['id']}_edited.stl"
+                        if edited_path.exists():
+                            import trimesh
+                            mesh = trimesh.load(str(edited_path), force="mesh")
+                            vertices = mesh.vertices.tolist()
+                            faces = mesh.faces.tolist()
+                        else:
+                            # Read global size settings if present
+                            geo = active_project.get("geometry", {})
+                            element_size = geo.get("raw_features", {}).get("mesh_settings", {}).get("global_element_size", 5.0) if "raw_features" in geo else 5.0
+                            refine_curv = geo.get("raw_features", {}).get("mesh_settings", {}).get("refine_curvature", False) if "raw_features" in geo else False
+                            deflection = element_size
+                            if refine_curv:
+                                deflection = deflection * 0.5
+                            geom_data = run_async(parse_cad_file(filepath, deflection=deflection))
+                            if geom_data.vertices is not None:
+                                vertices = geom_data.vertices.tolist()
+                                faces = geom_data.faces.tolist()
                     except Exception as e:
                         st.warning(f"Could not construct local mesh: {e}")
                 elif st.session_state.op_mode == "API Client":
@@ -1193,7 +1302,7 @@ if st.session_state.active_tab == "📐 Geometry Analysis":
                             from app.database import get_db_context
                             async def update_local_db():
                                 async with get_db_context() as db:
-                                    from app.models.models import GeometryFeatures
+                                    from app.models.db_models import GeometryFeatures
                                     from sqlalchemy import select
                                     g_db = (await db.execute(
                                         select(GeometryFeatures).where(GeometryFeatures.project_id == active_project["id"])
@@ -1249,6 +1358,197 @@ if st.session_state.active_tab == "📐 Geometry Analysis":
                     st.warning(f"⚠️ Warning: {total_flagged} elements violate quality thresholds (Aspect Ratio > 5.0, Skewness > 0.8). Recommend smaller element size.")
                 else:
                     st.success("✓ All elements pass quality thresholds (Aspect Ratio < 5.0, Skewness < 0.8).")
+
+            # Local Mesh Editing panel
+            st.write("---")
+            st.markdown("##### 🛠️ Local Mesh Editing Toolset")
+            mesh_op = st.selectbox(
+                "Choose Local Editing Operation",
+                options=[
+                    "None",
+                    "Regional Density Sizing",
+                    "Neighbor-Aware Node Move",
+                    "Centroid or Edge Split",
+                    "Sub-region Remesh Patch",
+                    "Laplacian Smoothing",
+                    "Reset & Rebuild Mesh"
+                ],
+                key="streamlit_local_mesh_op"
+            )
+
+            if mesh_op == "Regional Density Sizing":
+                st.markdown("**Subdivide Elements in Bounding Box**")
+                col_b1, col_b2 = st.columns(2)
+                with col_b1:
+                    bbox_min_str = st.text_input("Min Corner [X,Y,Z] (mm)", value="-10.0,-10.0,-10.0")
+                with col_b2:
+                    bbox_max_str = st.text_input("Max Corner [X,Y,Z] (mm)", value="10.0,10.0,10.0")
+                local_size = st.slider("Target Local Element Size (mm)", min_value=0.2, max_value=10.0, value=2.0, step=0.1)
+                
+                if st.button("Apply Density Subdivision", use_container_width=True):
+                    try:
+                        bbox_min = [float(x) for x in bbox_min_str.split(",")]
+                        bbox_max = [float(x) for x in bbox_max_str.split(",")]
+                        if len(bbox_min) != 3 or len(bbox_max) != 3:
+                            st.error("Min/Max coordinates must be format: x,y,z")
+                        else:
+                            with st.spinner("Applying density subdivision..."):
+                                if st.session_state.op_mode == "Standalone":
+                                    success = run_standalone_mesh_op(
+                                        active_project["id"], "density",
+                                        bbox_min=bbox_min, bbox_max=bbox_max, target_size=local_size
+                                    )
+                                else:
+                                    res = api_request("POST", f"/projects/{st.session_state.active_project_id}/mesh/density",
+                                                      json={"bbox_min": bbox_min, "bbox_max": bbox_max, "target_size": local_size})
+                                    success = res is not None and res.get("success")
+                                if success:
+                                    st.success("Subdivision applied!")
+                                    st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to apply: {e}")
+
+            elif mesh_op == "Neighbor-Aware Node Move":
+                st.markdown("**Move Selected Node(s) with Falloff**")
+                v_indices_str = st.text_input("Vertex Indices (comma-separated)", value="0")
+                delta_str = st.text_input("Displacement [dX,dY,dZ] (mm)", value="1.0,0.0,0.0")
+                rad_str = st.text_input("Influence Radius (mm) - Leave blank for graph-ring", value="")
+                
+                if st.button("Apply Displacement", use_container_width=True):
+                    try:
+                        vertex_indices = [int(x) for x in v_indices_str.split(",") if x.strip()]
+                        delta = [float(x) for x in delta_str.split(",")]
+                        radius = float(rad_str) if rad_str.strip() else None
+                        if len(delta) != 3:
+                            st.error("Delta vector must be format: dx,dy,dz")
+                        else:
+                            with st.spinner("Moving vertices..."):
+                                if st.session_state.op_mode == "Standalone":
+                                    success = run_standalone_mesh_op(
+                                        active_project["id"], "move",
+                                        vertex_indices=vertex_indices, delta=delta, radius=radius
+                                    )
+                                else:
+                                    res = api_request("POST", f"/projects/{st.session_state.active_project_id}/mesh/move",
+                                                      json={"vertex_indices": vertex_indices, "delta": delta, "radius": radius})
+                                    success = res is not None and res.get("success")
+                                if success:
+                                    st.success("Vertices moved!")
+                                    st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to apply: {e}")
+
+            elif mesh_op == "Centroid or Edge Split":
+                st.markdown("**Centroid Split (1-to-3) or Edge Split (1-to-2)**")
+                split_type = st.radio("Split Type", ["Face Centroid", "Edge Midpoint"], horizontal=True)
+                
+                if split_type == "Face Centroid":
+                    face_idx = st.number_input("Face Index", min_value=0, value=0, step=1)
+                    if st.button("Split Face Centroid", use_container_width=True):
+                        with st.spinner("Splitting face..."):
+                            if st.session_state.op_mode == "Standalone":
+                                success = run_standalone_mesh_op(active_project["id"], "split", face_index=face_idx)
+                            else:
+                                res = api_request("POST", f"/projects/{st.session_state.active_project_id}/mesh/split",
+                                                  json={"face_index": face_idx})
+                                success = res is not None and res.get("success")
+                            if success:
+                                st.success("Face split!")
+                                st.rerun()
+                else:
+                    col_v1, col_v2 = st.columns(2)
+                    with col_v1:
+                        v_start = st.number_input("Start Vertex Index", min_value=0, value=0, step=1)
+                    with col_v2:
+                        v_end = st.number_input("End Vertex Index", min_value=0, value=1, step=1)
+                    if st.button("Split Edge Midpoint", use_container_width=True):
+                        with st.spinner("Splitting edge..."):
+                            if st.session_state.op_mode == "Standalone":
+                                success = run_standalone_mesh_op(active_project["id"], "split", v_start=v_start, v_end=v_end)
+                            else:
+                                res = api_request("POST", f"/projects/{st.session_state.active_project_id}/mesh/split",
+                                                  json={"v_start": v_start, "v_end": v_end})
+                                success = res is not None and res.get("success")
+                            if success:
+                                st.success("Edge split!")
+                                st.rerun()
+
+            elif mesh_op == "Sub-region Remesh Patch":
+                st.markdown("**Local Patch Remeshing & Stitching**")
+                patch_faces_str = st.text_input("Face Indices to Replace (comma-separated)", value="0,1,2")
+                patch_size = st.slider("Target Patch Element Size (mm)", min_value=0.2, max_value=10.0, value=2.0, step=0.1)
+                
+                if st.button("Replace Sub-region Patch", use_container_width=True):
+                    try:
+                        patch_face_indices = [int(x) for x in patch_faces_str.split(",") if x.strip()]
+                        if not patch_face_indices:
+                            st.error("Must provide at least one face index.")
+                        else:
+                            with st.spinner("Replacing patch..."):
+                                if st.session_state.op_mode == "Standalone":
+                                    success = run_standalone_mesh_op(
+                                        active_project["id"], "replace",
+                                        patch_face_indices=patch_face_indices, target_size=patch_size
+                                    )
+                                else:
+                                    res = api_request("POST", f"/projects/{st.session_state.active_project_id}/mesh/replace",
+                                                      json={"patch_face_indices": patch_face_indices, "target_size": patch_size})
+                                    success = res is not None and res.get("success")
+                                if success:
+                                    st.success("Patch replaced and stitched!")
+                                    st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to apply: {e}")
+
+            elif mesh_op == "Laplacian Smoothing":
+                st.markdown("**Smooth Local or Global Mesh Areas**")
+                col_s1, col_s2 = st.columns(2)
+                with col_s1:
+                    iterations = st.slider("Iterations", min_value=1, max_value=50, value=10, step=1)
+                with col_s2:
+                    lambda_param = st.slider("Lambda (damping)", min_value=0.05, max_value=1.0, value=0.5, step=0.05)
+                
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    pin_boundary = st.checkbox("Pin Boundary Vertices", value=True)
+                with col_c2:
+                    pin_sharp = st.checkbox("Pin Sharp Features", value=True)
+                    
+                sharp_thresh = 30.0
+                if pin_sharp:
+                    sharp_thresh = st.slider("Sharp Dihedral Angle Threshold (°)", min_value=5.0, max_value=90.0, value=30.0, step=5.0)
+                    
+                if st.button("Apply Laplacian Smoothing", use_container_width=True):
+                    with st.spinner("Smoothing mesh..."):
+                        if st.session_state.op_mode == "Standalone":
+                            success = run_standalone_mesh_op(
+                                active_project["id"], "smooth",
+                                iterations=iterations, lambda_param=lambda_param,
+                                pin_boundary=pin_boundary, pin_sharp=pin_sharp, sharp_threshold_deg=sharp_thresh
+                            )
+                        else:
+                            res = api_request("POST", f"/projects/{st.session_state.active_project_id}/mesh/smooth",
+                                              json={"iterations": iterations, "lambda_param": lambda_param,
+                                                    "pin_boundary": pin_boundary, "pin_sharp": pin_sharp, "sharp_threshold_deg": sharp_thresh})
+                            success = res is not None and res.get("success")
+                        if success:
+                            st.success("Smoothing applied!")
+                            st.rerun()
+
+            elif mesh_op == "Reset & Rebuild Mesh":
+                st.markdown("**Reset Mesh & Remesh Everything**")
+                rebuild_size = st.slider("Rebuild Element Size (mm)", min_value=0.5, max_value=20.0, value=5.0, step=0.5)
+                if st.button("Reset & Rebuild Mesh", use_container_width=True):
+                    with st.spinner("Rebuilding mesh from CAD..."):
+                        if st.session_state.op_mode == "Standalone":
+                            success = run_standalone_rebuild(active_project["id"], rebuild_size)
+                        else:
+                            res = api_request("POST", f"/projects/{st.session_state.active_project_id}/mesh/rebuild",
+                                              json={"global_element_size": rebuild_size})
+                            success = res is not None and res.get("success")
+                        if success:
+                            st.success("Mesh reset & rebuilt successfully!")
+                            st.rerun()
 
     # Suggestions row
     if active_project and "geometry" in active_project and active_project["geometry"]:
