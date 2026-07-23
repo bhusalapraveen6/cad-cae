@@ -63,8 +63,11 @@ export default function Sidebar() {
       <nav className="sidebar-nav">
         {/* Main nav */}
         <div className="nav-section-label">Main</div>
-        <NavLink to="/" end className={({isActive}) => `nav-item${isActive ? ' active' : ''}`}>
-          <span className="nav-icon">⌂</span> Home
+        <NavLink to="/dashboard" end className={({isActive}) => `nav-item${isActive ? ' active' : ''}`}>
+          <span className="nav-icon">⌂</span> Dashboard
+        </NavLink>
+        <NavLink to="/" className="nav-item">
+          <span className="nav-icon">←</span> Back to Portfolio
         </NavLink>
         <NavLink to="/upload" className={({isActive}) => `nav-item${isActive ? ' active' : ''}`}>
           <span className="nav-icon">↑</span> Upload CAD

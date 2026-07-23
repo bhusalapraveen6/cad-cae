@@ -1,50 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@import "tailwindcss";
+
 /* ============================================================
    CAD-CAE Analyzer — Global Design System
    Dark Engineering Theme: Navy / Electric Blue / Cyan
    ============================================================ */
 
-/* ── Google Fonts import (fallback if preconnect fails) ──── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
 /* ── Design tokens ──────────────────────────────────────────── */
 :root {
-  /* Colors */
-  --bg-deep:       #080c18;
-  --bg-base:       #0d1220;
-  --bg-surface:    #111827;
-  --bg-elevated:   #1a2235;
-  --bg-overlay:    #212d45;
+  /* ==========================================
+     LIGHT MODE ("Blueprint" theme) - Default
+     ========================================== */
+  --bg-deep:       #f5f3ee; /* Off-white/cream paper */
+  --bg-base:       #faf8f5;
+  --bg-surface:    #ffffff;
+  --bg-elevated:   #eae6dc;
+  --bg-overlay:    rgba(30, 58, 95, 0.06);
 
-  --border-subtle: rgba(99,179,237,0.08);
-  --border-mid:    rgba(99,179,237,0.18);
-  --border-strong: rgba(99,179,237,0.35);
+  --border-subtle: rgba(30, 58, 95, 0.08);
+  --border-mid:    rgba(30, 58, 95, 0.18);
+  --border-strong: rgba(30, 58, 95, 0.35);
 
-  --accent-blue:   #2979ff;
-  --accent-cyan:   #00e5ff;
-  --accent-indigo: #536dfe;
-  --accent-teal:   #1de9b6;
-  --accent-orange: #ff6d00;
-  --accent-red:    #ff1744;
-  --accent-green:  #00e676;
-  --accent-yellow: #ffea00;
+  --accent-blue:   #1e3a5f; /* Navy Blue */
+  --accent-cyan:   #4a90d9; /* Steel Blue */
+  --accent-indigo: #3b82f6;
+  --accent-teal:   #0d9488;
+  --accent-orange: #ff6b35; /* Safety Orange */
+  --accent-red:    #dc2626;
+  --accent-green:  #16a34a;
+  --accent-yellow: #ca8a04;
+
+  /* Blueprint Grid lines */
+  --grid-line-color:  rgba(30, 58, 95, 0.12);
+  --grid-line-subtle: rgba(30, 58, 95, 0.05);
 
   /* Gradients */
-  --grad-primary:  linear-gradient(135deg, #2979ff 0%, #00e5ff 100%);
-  --grad-surface:  linear-gradient(135deg, #111827 0%, #1a2235 100%);
-  --grad-hero:     linear-gradient(135deg, #0d1220 0%, #152038 40%, #0d1b33 100%);
-  --grad-glow:     radial-gradient(ellipse at 50% 0%, rgba(41,121,255,0.15) 0%, transparent 70%);
+  --grad-primary:  linear-gradient(135deg, #1e3a5f 0%, #4a90d9 100%);
+  --grad-surface:  linear-gradient(135deg, #ffffff 0%, #faf8f5 100%);
+  --grad-hero:     linear-gradient(135deg, #f5f3ee 0%, #eae6dc 100%);
+  --grad-glow:     radial-gradient(ellipse at 50% 0%, rgba(30, 58, 95, 0.06) 0%, transparent 70%);
 
   /* Category colors */
-  --cat-structural: #2979ff;
-  --cat-thermal:    #ff6d00;
-  --cat-cfd:        #00e5ff;
-  --cat-fatigue:    #ff1744;
+  --cat-structural: #1e3a5f;
+  --cat-thermal:    #ff6b35;
+  --cat-cfd:        #4a90d9;
+  --cat-fatigue:    #dc2626;
 
   /* Text */
-  --text-primary:  #f0f4ff;
-  --text-secondary:#94a3b8;
-  --text-muted:    #4b6080;
-  --text-accent:   #00e5ff;
+  --text-primary:  #0f172a;
+  --text-secondary:#334155;
+  --text-muted:    #64748b;
+  --text-accent:   #1e3a5f;
 
   /* Typography */
   --font-body:  'Inter', system-ui, -apple-system, sans-serif;
@@ -65,12 +73,12 @@
   --radius-xl:  32px;
   --radius-full: 9999px;
 
-  /* Shadows */
-  --shadow-sm:  0 2px 8px rgba(0,0,0,0.4);
-  --shadow-md:  0 8px 24px rgba(0,0,0,0.5);
-  --shadow-lg:  0 20px 60px rgba(0,0,0,0.6);
-  --shadow-glow:0 0 30px rgba(41,121,255,0.25);
-  --shadow-cyan:0 0 20px rgba(0,229,255,0.2);
+  /* Shadows (Softer in Light mode) */
+  --shadow-sm:  0 2px 8px rgba(30,58,95,0.06);
+  --shadow-md:  0 8px 24px rgba(30,58,95,0.08);
+  --shadow-lg:  0 20px 60px rgba(30,58,95,0.12);
+  --shadow-glow:0 0 20px rgba(30,58,95,0.08);
+  --shadow-cyan:0 0 15px rgba(74,144,217,0.08);
 
   /* Transitions */
   --transition-fast:   150ms cubic-bezier(0.4,0,0.2,1);
@@ -80,6 +88,83 @@
   /* Layout */
   --sidebar-width: 260px;
   --topbar-height: 64px;
+}
+
+html.dark {
+  /* ==========================================
+     DARK MODE ("Workshop" theme)
+     ========================================== */
+  --bg-deep:       #0f1115; /* Charcoal/graphite background */
+  --bg-base:       #15171c;
+  --bg-surface:    #1a1d24;
+  --bg-elevated:   #22262f;
+  --bg-overlay:    rgba(74, 144, 217, 0.06);
+
+  --border-subtle: rgba(74, 144, 217, 0.08);
+  --border-mid:    rgba(74, 144, 217, 0.18);
+  --border-strong: rgba(74, 144, 217, 0.35);
+
+  --accent-blue:   #4a90d9; /* Steel Blue */
+  --accent-cyan:   #38bdf8;
+  --accent-indigo: #6366f1;
+  --accent-teal:   #14b8a6;
+  --accent-orange: #ff6b35; /* Safety Orange */
+  --accent-red:    #ef4444;
+  --accent-green:  #22c55e;
+  --accent-yellow: #eab308;
+
+  /* Blueprint Grid lines */
+  --grid-line-color:  rgba(74, 144, 217, 0.12);
+  --grid-line-subtle: rgba(74, 144, 217, 0.04);
+
+  /* Gradients */
+  --grad-primary:  linear-gradient(135deg, #4a90d9 0%, #ff6b35 100%);
+  --grad-surface:  linear-gradient(135deg, #1a1d24 0%, #22262f 100%);
+  --grad-hero:     linear-gradient(135deg, #0f1115 0%, #15171c 100%);
+  --grad-glow:     radial-gradient(ellipse at 50% 0%, rgba(74, 144, 217, 0.15) 0%, transparent 70%);
+
+  /* Category colors */
+  --cat-structural: #4a90d9;
+  --cat-thermal:    #ff6b35;
+  --cat-cfd:        #38bdf8;
+  --cat-fatigue:    #ef4444;
+
+  /* Text */
+  --text-primary:  #f1f5f9;
+  --text-secondary:#cbd5e1;
+  --text-muted:    #64748b;
+  --text-accent:   #4a90d9;
+
+  /* Shadows (Glowing in Dark mode) */
+  --shadow-sm:  0 2px 8px rgba(0,0,0,0.5);
+  --shadow-md:  0 8px 24px rgba(0,0,0,0.6);
+  --shadow-lg:  0 20px 60px rgba(0,0,0,0.7);
+  --shadow-glow:0 0 25px rgba(74,144,217,0.2);
+  --shadow-cyan:0 0 20px rgba(56,189,248,0.15);
+}
+
+/* Smooth theme transition classes */
+.theme-transition-all,
+.theme-transition-all *,
+.theme-transition-all *::before,
+.theme-transition-all *::after {
+  transition: background-color 350ms cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 350ms cubic-bezier(0.4, 0, 0.2, 1),
+              color 350ms cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 350ms cubic-bezier(0.4, 0, 0.2, 1),
+              text-shadow 350ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Technical Blueprint Grid background pattern */
+.blueprint-grid {
+  background-image: 
+    linear-gradient(var(--grid-line-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line-color) 1px, transparent 1px),
+    linear-gradient(var(--grid-line-subtle) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line-subtle) 1px, transparent 1px);
+  background-size: 100px 100px, 100px 100px, 20px 20px, 20px 20px;
+  background-position: -1px -1px, -1px -1px, -1px -1px, -1px -1px;
+  background-color: var(--bg-deep);
 }
 
 /* ── Reset ────────────────────────────────────────────────── */
