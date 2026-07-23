@@ -74,6 +74,11 @@ async def _parse_mesh_file(file_path: Path, suffix: str) -> GeometryData:
     surface_area = float(mesh.area)
     com = mesh.center_mass.tolist()
 
+    try:
+        num_components = len(mesh.split()) if hasattr(mesh, 'split') else 1
+    except Exception:
+        num_components = 1
+
     return GeometryData(
         volume=volume,
         surface_area=surface_area,
@@ -83,7 +88,7 @@ async def _parse_mesh_file(file_path: Path, suffix: str) -> GeometryData:
         faces=np.array(mesh.faces, dtype=np.int32),
         normals=np.array(mesh.face_normals, dtype=np.float32),
         is_watertight=bool(mesh.is_watertight),
-        num_components=len(mesh.split()) if hasattr(mesh, 'split') else 1,
+        num_components=num_components,
         format=suffix.lstrip("."),
     )
 
