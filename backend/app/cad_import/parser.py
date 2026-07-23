@@ -34,27 +34,27 @@ class GeometryData:
     format: str = "unknown"
 
 
-async def parse_cad_file(file_path: Path) -> GeometryData:
+async def parse_cad_file(file_path: Path, deflection: float = 5.0) -> GeometryData:
     """
     Parse a CAD file and return structured geometry data.
     Dispatches to the appropriate parser based on file extension and mode.
     """
     suffix = file_path.suffix.lower()
-    logger.info("Parsing CAD file", path=str(file_path), format=suffix, mock=settings.mock_cad_mode)
+    logger.info("Parsing CAD file", path=str(file_path), format=suffix, mock=settings.mock_cad_mode, deflection=deflection)
 
     if suffix in (".stl", ".obj", ".ply"):
-        return await _parse_mesh_file(file_path, suffix)
+        return await _parse_mesh_file(file_path, suffix, deflection)
     elif suffix in (".step", ".stp", ".iges", ".igs"):
         if settings.mock_cad_mode:
             logger.warning("Mock CAD mode: STEP/IGES parsed as synthetic geometry")
-            return _synthetic_geometry(suffix)
+            return _synthetic_geometry(suffix, deflection)
         else:
-            return await _parse_step_iges(file_path, suffix)
+            return await _parse_step_iges(file_path, suffix, deflection)
     else:
         raise ValueError(f"Unsupported CAD format: {suffix}")
 
 
-async def _parse_mesh_file(file_path: Path, suffix: str) -> GeometryData:
+async def _parse_mesh_file(file_path: Path, suffix: str, deflection: float = 5.0) -> GeometryData:
     """Parse STL or OBJ using trimesh (runs on Windows natively)."""
     import trimesh
 
@@ -93,7 +93,7 @@ async def _parse_mesh_file(file_path: Path, suffix: str) -> GeometryData:
     )
 
 
-async def _parse_step_iges(file_path: Path, suffix: str) -> GeometryData:
+async def _parse_step_iges(file_path: Path, suffix: str, deflection: float = 0.5) -> GeometryData:
     """
     Parse STEP/IGES using pythonocc-core (OpenCASCADE).
     Only available in Docker environment.
@@ -130,8 +130,8 @@ async def _parse_step_iges(file_path: Path, suffix: str) -> GeometryData:
         brepbndlib.Add(shape, bbox)
         xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
 
-        # Tessellate for viewer
-        BRepMesh_IncrementalMesh(shape, 0.5, False, 0.5, True)
+        # Tessellate for viewer - deflection parameter dictates element size/refinement
+        BRepMesh_IncrementalMesh(shape, deflection, False, 0.5, True)
         vertices, faces = _extract_occ_mesh(shape)
 
         return GeometryData(
@@ -146,7 +146,7 @@ async def _parse_step_iges(file_path: Path, suffix: str) -> GeometryData:
         )
     except ImportError:
         logger.error("pythonocc-core not available; falling back to synthetic geometry")
-        return _synthetic_geometry(suffix)
+        return _synthetic_geometry(suffix, deflection)
 
 
 def _extract_occ_mesh(shape) -> Tuple[np.ndarray, np.ndarray]:
@@ -182,25 +182,51 @@ def _extract_occ_mesh(shape) -> Tuple[np.ndarray, np.ndarray]:
     return np.concatenate(all_verts), np.concatenate(all_faces)
 
 
-def _synthetic_geometry(suffix: str) -> GeometryData:
+def _synthetic_geometry(suffix: str, element_size: float = 5.0) -> GeometryData:
     """
     Return synthetic bracket-like geometry for mock/demo mode.
     Used when pythonocc-core is not available (Windows native dev).
+    Subdivides the outer shell to simulate dynamic mesh density based on element size.
     """
     # Simulate a steel bracket: ~100×50×30 mm
     volume = 100.0 * 50.0 * 30.0 * 0.6   # subtract material for hollow regions
     surface_area = 2 * (100 * 50 + 100 * 30 + 50 * 30) * 1.2
 
-    # Cube vertices for visualization
-    verts = np.array([
-        [0, 0, 0], [100, 0, 0], [100, 50, 0], [0, 50, 0],
-        [0, 0, 30], [100, 0, 30], [100, 50, 30], [0, 50, 30],
-    ], dtype=np.float32)
-    faces = np.array([
-        [0,1,2],[0,2,3], [4,5,6],[4,6,7],
-        [0,1,5],[0,5,4], [1,2,6],[1,6,5],
-        [2,3,7],[2,7,6], [3,0,4],[3,4,7],
-    ], dtype=np.int32)
+    # Generate a subdivided box
+    element_size = max(0.5, min(element_size, 50.0))
+    dx, dy, dz = 100.0, 50.0, 30.0
+    nx = max(2, int(round(dx / element_size)))
+    ny = max(2, int(round(dy / element_size)))
+    nz = max(2, int(round(dz / element_size)))
+
+    vertices = []
+    faces = []
+    
+    def add_face(origin, u_dir, v_dir, u_div, v_div):
+        start_idx = len(vertices)
+        for i in range(u_div + 1):
+            for j in range(v_div + 1):
+                pt = origin + (i / u_div) * u_dir + (j / v_div) * v_dir
+                vertices.append(pt)
+        for i in range(u_div):
+            for j in range(v_div):
+                n0 = start_idx + i * (v_div + 1) + j
+                n1 = n0 + 1
+                n2 = start_idx + (i + 1) * (v_div + 1) + j
+                n3 = n2 + 1
+                faces.append([n0, n2, n1])
+                faces.append([n1, n2, n3])
+
+    origin = np.array([0.0, 0.0, 0.0])
+    add_face(origin, np.array([dx, 0, 0]), np.array([0, dy, 0]), nx, ny)
+    add_face(origin + np.array([0, 0, dz]), np.array([0, dy, 0]), np.array([dx, 0, 0]), ny, nx)
+    add_face(origin, np.array([0, dy, 0]), np.array([0, 0, dz]), ny, nz)
+    add_face(origin + np.array([dx, 0, 0]), np.array([0, 0, dz]), np.array([0, dy, 0]), nz, ny)
+    add_face(origin, np.array([0, 0, dz]), np.array([dx, 0, 0]), nz, nx)
+    add_face(origin + np.array([0, dy, 0]), np.array([dx, 0, 0]), np.array([0, 0, dz]), nx, nz)
+
+    verts = np.array(vertices, dtype=np.float32)
+    faces = np.array(faces, dtype=np.int32)
 
     return GeometryData(
         volume=volume,
@@ -213,3 +239,4 @@ def _synthetic_geometry(suffix: str) -> GeometryData:
         num_components=1,
         format=suffix.lstrip("."),
     )
+

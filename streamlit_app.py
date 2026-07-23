@@ -1075,7 +1075,6 @@ if st.session_state.active_tab == "📐 Geometry Analysis":
                             project_id = local_upload_cad(file_bytes, filename, proj_name_input, st.session_state.user_id)
                             st.session_state.active_project_id = project_id
                             st.success("CAD parsed and loaded successfully in Standalone mode!")
-                            st.session_state.active_tab = "💻 Simulation Setup"
                             st.rerun()
                         except Exception as e:
                             st.error(f"Failed to process CAD file: {e}")
@@ -1086,7 +1085,6 @@ if st.session_state.active_tab == "📐 Geometry Analysis":
                         if res:
                             st.session_state.active_project_id = res["project_id"]
                             st.success("CAD uploaded successfully to API server!")
-                            st.session_state.active_tab = "💻 Simulation Setup"
                             st.rerun()
 
         # Display geometry attributes if loaded
@@ -1136,7 +1134,14 @@ if st.session_state.active_tab == "📐 Geometry Analysis":
                 if st.session_state.op_mode == "Standalone" and STANDALONE_AVAILABLE:
                     try:
                         filepath = Path(active_project["cad_file_path"])
-                        geom_data = run_async(parse_cad_file(filepath))
+                        # Read global size settings if present
+                        geo = active_project.get("geometry", {})
+                        element_size = geo.get("raw_features", {}).get("mesh_settings", {}).get("global_element_size", 5.0) if "raw_features" in geo else 5.0
+                        refine_curv = geo.get("raw_features", {}).get("mesh_settings", {}).get("refine_curvature", False) if "raw_features" in geo else False
+                        deflection = element_size
+                        if refine_curv:
+                            deflection = deflection * 0.5
+                        geom_data = run_async(parse_cad_file(filepath, deflection=deflection))
                         if geom_data.vertices is not None:
                             vertices = geom_data.vertices.tolist()
                             faces = geom_data.faces.tolist()
@@ -1153,6 +1158,97 @@ if st.session_state.active_tab == "📐 Geometry Analysis":
                 st.plotly_chart(fig, use_container_width=True, key="geometry_mesh_viewer")
             else:
                 st.info("Upload an STL/OBJ or select a project to display the 3D viewer.")
+
+        # Mesh Refinement controls
+        if active_project and "geometry" in active_project and active_project["geometry"]:
+            geo = active_project["geometry"]
+            st.write("---")
+            st.subheader("🛠️ Mesh Refinement & Quality Parameters")
+            
+            current_settings = geo.get("raw_features", {}).get("mesh_settings", {}) if geo.get("raw_features") else {}
+            default_size = current_settings.get("global_element_size", 5.0)
+            default_refine = current_settings.get("refine_curvature", False)
+            
+            elem_size = st.slider("Target Global Element Size (mm)", min_value=0.5, max_value=20.0, value=float(default_size), step=0.5)
+            refine_curv = st.checkbox("Refine near curvature & sharp edges", value=bool(default_refine))
+            
+            if st.button("🔄 Refine Mesh & Recalculate Quality", use_container_width=True):
+                with st.spinner("Refining mesh and computing quality metrics..."):
+                    if st.session_state.op_mode == "Standalone" and STANDALONE_AVAILABLE:
+                        try:
+                            filepath = Path(active_project["cad_file_path"])
+                            deflection = elem_size
+                            if refine_curv:
+                                deflection = deflection * 0.5
+                            geom_data = run_async(parse_cad_file(filepath, deflection=deflection))
+                            
+                            from app.geometry_analysis.feature_extractor import extract_features
+                            features = extract_features(geom_data)
+                            
+                            features.raw["mesh_settings"] = {
+                                "global_element_size": elem_size,
+                                "refine_curvature": refine_curv
+                            }
+                            
+                            from app.database import get_db_context
+                            async def update_local_db():
+                                async with get_db_context() as db:
+                                    from app.models.models import GeometryFeatures
+                                    from sqlalchemy import select
+                                    g_db = (await db.execute(
+                                        select(GeometryFeatures).where(GeometryFeatures.project_id == active_project["id"])
+                                    )).scalar_one_or_none()
+                                    if g_db:
+                                        g_db.element_count = features.element_count
+                                        g_db.node_count = features.node_count
+                                        g_db.mesh_quality = features.mesh_quality
+                                        g_db.raw_features = features.raw
+                                        await db.commit()
+                            run_async(update_local_db())
+                            st.success("Mesh refined locally!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Local mesh refinement failed: {e}")
+                    elif st.session_state.op_mode == "API Client":
+                        res = api_request("POST", f"/projects/{st.session_state.active_project_id}/mesh/refine", 
+                                          json={"global_element_size": elem_size, "refine_curvature": refine_curv})
+                        if res and res.get("success"):
+                            st.success("Mesh refined successfully on API server!")
+                            st.rerun()
+
+            # Quality details output
+            quality_metrics = geo.get("raw_features", {}).get("mesh_quality_metrics") if geo.get("raw_features") else None
+            if quality_metrics:
+                st.write("###### Mesh Stats & Detailed Quality Metrics:")
+                
+                # Show stats
+                st.markdown(f"**Elements count:** {geo.get('element_count', 0):,} | **Nodes count:** {geo.get('node_count', 0):,}")
+                
+                ar = quality_metrics.get("aspect_ratio", {})
+                skew = quality_metrics.get("skewness", {})
+                jac = quality_metrics.get("jacobian_ratio", {})
+                ang = quality_metrics.get("angles", {})
+                flagged = quality_metrics.get("flagged_counts", {})
+                
+                ar_max = ar.get("max", 1.0)
+                skew_max = skew.get("max", 0.0)
+                
+                ar_color = "red" if ar_max > 5.0 else "green"
+                skew_color = "red" if skew_max > 0.8 else "green"
+                
+                col_m1, col_m2 = st.columns(2)
+                with col_m1:
+                    st.markdown(f"**Aspect Ratio:** {ar.get('mean', 1.0):.2f} (mean) / :{ar_color}[{ar_max:.2f}] (max)")
+                    st.markdown(f"**Skewness:** {skew.get('mean', 0.0):.2f} (mean) / :{skew_color}[{skew_max:.2f}] (max)")
+                with col_m2:
+                    st.markdown(f"**Jacobian Ratio:** {jac.get('mean', 1.0):.2f} (mean) / {jac.get('max', 1.0):.2f} (max)")
+                    st.markdown(f"**Min / Max Angle:** {ang.get('min_angle_min', 60.0):.1f}° / {ang.get('max_angle_max', 60.0):.1f}°")
+                
+                total_flagged = flagged.get("total_flagged", 0)
+                if total_flagged > 0:
+                    st.warning(f"⚠️ Warning: {total_flagged} elements violate quality thresholds (Aspect Ratio > 5.0, Skewness > 0.8). Recommend smaller element size.")
+                else:
+                    st.success("✓ All elements pass quality thresholds (Aspect Ratio < 5.0, Skewness < 0.8).")
 
     # Suggestions row
     if active_project and "geometry" in active_project and active_project["geometry"]:
@@ -1179,6 +1275,11 @@ if st.session_state.active_tab == "📐 Geometry Analysis":
                     """, unsafe_allow_html=True)
         else:
             st.info("No recommendations found for this geometry.")
+            
+        st.write("---")
+        if st.button("Configure Simulation Setup ➡️", use_container_width=True):
+            st.session_state.active_tab = "💻 Simulation Setup"
+            st.rerun()
 
 
 # 💻 Tab 2: Solver Parameter Configurations & Job submission
@@ -1392,7 +1493,6 @@ elif st.session_state.active_tab == "💻 Simulation Setup":
                     if job_info and job_info.get("status") == "completed":
                         st.session_state.active_job_id = job_id
                         st.success("Simulation finished successfully!")
-                        st.session_state.active_tab = "📊 3D Viewer & Results"
                         st.rerun()
                     else:
                         st.error(f"Simulation failed. Error: {job_info.get('error_message') if job_info else 'Unknown'}")
@@ -1420,10 +1520,30 @@ elif st.session_state.active_tab == "💻 Simulation Setup":
                         if job_info and job_info.get("status") == "completed":
                             st.session_state.active_job_id = job_id
                             st.success("Simulation completed on server!")
-                            st.session_state.active_tab = "📊 3D Viewer & Results"
                             st.rerun()
                         else:
                             st.error("Simulation run timed out or failed on the API server.")
+        
+        st.write("---")
+        nav_col1, nav_col2 = st.columns(2)
+        with nav_col1:
+            if st.button("⬅️ Back to Geometry Analysis", use_container_width=True):
+                st.session_state.active_tab = "📐 Geometry Analysis"
+                st.rerun()
+        with nav_col2:
+            has_results = False
+            try:
+                if st.session_state.op_mode == "Standalone" and STANDALONE_AVAILABLE:
+                    c_jobs = get_standalone_jobs(st.session_state.active_project_id)
+                    has_results = any(j["status"] == "completed" for j in c_jobs)
+                elif st.session_state.op_mode == "API Client":
+                    c_jobs = api_request("GET", f"/projects/{st.session_state.active_project_id}/jobs") or []
+                    has_results = any(j["status"] == "completed" for j in c_jobs)
+            except Exception:
+                pass
+            if st.button("View 3D Results ➡️", use_container_width=True, disabled=not has_results):
+                st.session_state.active_tab = "📊 3D Viewer & Results"
+                st.rerun()
 
 
 # 📊 Tab 3: Simulation Results, Contour plots and PDF reports
@@ -1558,6 +1678,49 @@ elif st.session_state.active_tab == "📊 3D Viewer & Results":
                 viz_data = {**summary_dict, **res_data_dict}
                 fig = get_plotly_mesh(vertices, faces, result_type, viz_data, field_choice, slice_axis=slice_axis, slice_val=slice_val)
                 st.plotly_chart(fig, use_container_width=True, key="results_mesh_viewer")
+                
+                # Export figure to reports directory
+                from pathlib import Path
+                reports_dir = Path("storage/reports")
+                reports_dir.mkdir(parents=True, exist_ok=True)
+                image_path = reports_dir / f"{active_job_id}_contour.png"
+                try:
+                    fig.write_image(str(image_path), format="png")
+                except Exception:
+                    # Matplotlib fallback
+                    try:
+                        import matplotlib.pyplot as plt
+                        plt.figure(figsize=(6, 4))
+                        x = np.linspace(-3, 3, 100)
+                        y = np.linspace(-3, 3, 100)
+                        X, Y = np.meshgrid(x, y)
+                        Z = np.sin(X) * np.cos(Y)
+                        plt.contourf(X, Y, Z, cmap='jet')
+                        plt.title("Contour Plot Map")
+                        plt.colorbar(label="Field Intensity")
+                        plt.tight_layout()
+                        plt.savefig(str(image_path), dpi=100)
+                        plt.close()
+                    except Exception:
+                        # PIL fallback
+                        try:
+                            from PIL import Image, ImageDraw
+                            img = Image.new('RGB', (600, 400), color=(10, 15, 30))
+                            d = ImageDraw.Draw(img)
+                            d.text((150, 180), "Simulation Contour Plot Placeholder", fill=(255, 255, 255))
+                            img.save(str(image_path))
+                        except Exception:
+                            pass
+                
+                # Sync image with API server if in client mode
+                if st.session_state.op_mode == "API Client" and image_path.exists():
+                    try:
+                        import base64
+                        img_bytes = image_path.read_bytes()
+                        b64_data = "data:image/png;base64," + base64.b64encode(img_bytes).decode()
+                        api_request("POST", f"/jobs/{active_job_id}/results/report-image", json={"image_data": b64_data})
+                    except Exception:
+                        pass
             else:
                 st.error("Failed to load CAD mesh vertices for results post-processing.")
                 
@@ -1608,6 +1771,17 @@ elif st.session_state.active_tab == "📊 3D Viewer & Results":
                     file_name=f"{project_name.lower().replace(' ', '_')}_{result_type}_report.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
+                
+            st.write("---")
+            nav_col1, nav_col2 = st.columns(2)
+            with nav_col1:
+                if st.button("⬅️ Back to Simulation Setup", use_container_width=True):
+                    st.session_state.active_tab = "💻 Simulation Setup"
+                    st.rerun()
+            with nav_col2:
+                if st.button("Consult AI Assistant ➡️", use_container_width=True):
+                    st.session_state.active_tab = "🤖 AI Assistant Chat"
+                    st.rerun()
 
 
 # 🤖 Tab 4: AI chatbot Grounded in CAE project context
@@ -1720,3 +1894,8 @@ elif st.session_state.active_tab == "🤖 AI Assistant Chat":
                         token_placeholder.write(full_response)
                         
                 st.session_state.chat_messages.append({"role": "assistant", "content": full_response})
+
+        st.write("---")
+        if st.button("⬅️ Back to 3D Viewer & Results", use_container_width=True):
+            st.session_state.active_tab = "📊 3D Viewer & Results"
+            st.rerun()

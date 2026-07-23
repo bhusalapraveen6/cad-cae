@@ -44,6 +44,7 @@ import {
   getApiKeyStatus,
   saveApiKey,
   deleteApiKey,
+  refineMesh,
   type Project,
   type GeometryFeatures,
   type AnalysisSuggestion,
@@ -174,6 +175,12 @@ export default function Dashboard() {
   const [activeResults, setActiveResults] = useState<AnalysisResult | null>(null)
   const [resultsMode, setResultsMode] = useState<'stress' | 'displacement'>('stress')
 
+  // Mesh refinement states
+  const [elementSize, setElementSize] = useState<number>(5.0)
+  const [refineCurvature, setRefineCurvature] = useState<boolean>(false)
+  const [isRefining, setIsRefining] = useState<boolean>(false)
+  const [meshQualityMetrics, setMeshQualityMetrics] = useState<Record<string, any> | null>(null)
+
   // Load API Key and projects on mount
   useEffect(() => {
     fetchApiKeyStatus()
@@ -253,6 +260,16 @@ export default function Dashboard() {
       try {
         const geo = await getGeometry(proj.id)
         setActiveGeometry(geo)
+        const metrics = (geo as any).raw_features?.mesh_quality_metrics || null
+        setMeshQualityMetrics(metrics)
+        const settings = (geo as any).raw_features?.mesh_settings
+        if (settings) {
+          setElementSize(settings.global_element_size || 5.0)
+          setRefineCurvature(settings.refine_curvature || false)
+        } else {
+          setElementSize(5.0)
+          setRefineCurvature(false)
+        }
       } catch (e) {
         // Mock fallback for default historical projects
         setActiveGeometry({
@@ -454,6 +471,16 @@ export default function Dashboard() {
 
       if (res.geometry_features) {
         setActiveGeometry(res.geometry_features)
+        const metrics = (res.geometry_features as any).raw_features?.mesh_quality_metrics || null
+        setMeshQualityMetrics(metrics)
+        const settings = (res.geometry_features as any).raw_features?.mesh_settings
+        if (settings) {
+          setElementSize(settings.global_element_size || 5.0)
+          setRefineCurvature(settings.refine_curvature || false)
+        } else {
+          setElementSize(5.0)
+          setRefineCurvature(false)
+        }
       } else {
         // Fallback geometry characteristics
         setActiveGeometry({
@@ -482,6 +509,29 @@ export default function Dashboard() {
     }
   }
 
+  // Refine mesh
+  const handleRefineMesh = async () => {
+    if (!activeProject) return
+    setIsRefining(true)
+    try {
+      const res = await refineMesh(activeProject.id, elementSize, refineCurvature)
+      if (res.success) {
+        setActiveGeometry((prev) => prev ? {
+          ...prev,
+          element_count: res.element_count,
+          node_count: res.node_count,
+          mesh_quality: res.mesh_quality
+        } : null)
+        setMeshQualityMetrics(res.mesh_quality_metrics)
+        store.addToast('success', 'Mesh refinement completed!')
+      }
+    } catch (e: any) {
+      store.addToast('error', e.response?.data?.message || 'Mesh refinement failed.')
+    } finally {
+      setIsRefining(false)
+    }
+  }
+
   // Run simulation setup
   const handleRunSimulation = async () => {
     if (!activeProject) {
@@ -493,11 +543,17 @@ export default function Dashboard() {
     store.addToast('info', 'Launching solver job...')
 
     try {
+      setActiveResults(null)
       const job = await createJob(
         activeProject.id, 
         ['static_structural'], 
         {
           material: selectedMaterial,
+          mesh_settings: {
+            global_element_size: elementSize,
+            refine_curvature: refineCurvature,
+            element_order: 2
+          },
           boundary_conditions: [
             { type: 'fixed', face_ids: [1, 2], description: boundaryCondition.fixedFace },
             { type: 'force', fz: -parseFloat(boundaryCondition.forceMagnitude || '1000'), face_ids: [3], description: boundaryCondition.forceFace }
@@ -507,7 +563,8 @@ export default function Dashboard() {
       
       const newJobs = [job, ...activeJobs]
       setActiveJobs(newJobs)
-      setActiveTab('results')
+      // Removed automatic tab transition
+      // setActiveTab('results')
 
       // Track progress
       const unsub = subscribeJobProgress(
@@ -903,30 +960,32 @@ export default function Dashboard() {
                     
                     <div className="grid grid-cols-2 gap-3">
                       <div className="bg-navy-950 p-3 rounded-btn border border-navy-850 flex flex-col justify-center">
-                        <span className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Total Triangles</span>
+                        <span className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Total Elements</span>
                         <span className="text-xs font-bold text-cyan-400 font-mono">
-                          {activeGeometry?.element_count ? `${(activeGeometry.element_count / 1000).toFixed(0)}k` : '1.2M'}
+                          {activeGeometry?.element_count ? `${activeGeometry.element_count.toLocaleString()}` : 'N/A'}
                         </span>
                       </div>
                       
                       <div className="bg-navy-950 p-3 rounded-btn border border-navy-850 flex flex-col justify-center">
-                        <span className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Mesh Quality</span>
-                        <span className="text-xs font-bold text-emerald-400 font-semibold">
-                          {activeGeometry?.mesh_quality ? 'Good' : 'Good'}
-                        </span>
-                      </div>
-
-                      <div className="bg-navy-950 p-3 rounded-btn border border-navy-850 flex flex-col justify-center">
-                        <span className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Triangles</span>
+                        <span className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Node Count</span>
                         <span className="text-xs font-bold text-cyan-400 font-mono">
-                          {activeGeometry ? '1.2M' : '1'}
+                          {activeGeometry?.node_count ? `${activeGeometry.node_count.toLocaleString()}` : 'N/A'}
                         </span>
                       </div>
 
                       <div className="bg-navy-950 p-3 rounded-btn border border-navy-850 flex flex-col justify-center">
-                        <span className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Mesh Quality</span>
-                        <span className="text-xs font-bold text-emerald-400 font-semibold">
-                          {activeGeometry ? 'Good' : 'Good'}
+                        <span className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Overall Mesh Quality</span>
+                        <span className={`text-xs font-bold font-semibold ${
+                          activeGeometry?.mesh_quality && activeGeometry.mesh_quality < 0.7 ? 'text-amber-400' : 'text-emerald-400'
+                        }`}>
+                          {activeGeometry?.mesh_quality ? `${(activeGeometry.mesh_quality * 100).toFixed(1)}%` : 'N/A'}
+                        </span>
+                      </div>
+
+                      <div className="bg-navy-950 p-3 rounded-btn border border-navy-850 flex flex-col justify-center">
+                        <span className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Thin-Walled Check</span>
+                        <span className="text-xs font-bold text-slate-300 font-semibold">
+                          {activeGeometry?.is_thin_walled ? 'Thin-Walled' : 'Solid Body'}
                         </span>
                       </div>
                     </div>
@@ -938,6 +997,124 @@ export default function Dashboard() {
 
                 </div>
               </section>
+
+              {/* Mesh Refinement & Quality Parameter Controls Section */}
+              <section className="bg-navy-900/20 rounded-card border border-navy-850/80 p-5 mt-6 space-y-6">
+                <div className="flex items-center justify-between border-b border-navy-850/80 pb-3">
+                  <h3 className="font-bold text-sm text-white flex items-center gap-2">
+                    🛠️ Mesh Refinement & Sizing Controls
+                  </h3>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="bg-navy-900/40 p-4.5 rounded-card border border-navy-800 space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-[11px] text-slate-400 flex justify-between">
+                        <span>Target Global Element Size:</span>
+                        <span className="font-mono text-cyan-400 font-bold">{elementSize.toFixed(1)} mm</span>
+                      </label>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="20.0"
+                        step="0.5"
+                        value={elementSize}
+                        onChange={(e) => setElementSize(parseFloat(e.target.value))}
+                        className="w-full h-1 bg-navy-850 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                      />
+                    </div>
+
+                    <div className="flex items-start gap-2.5 pt-2">
+                      <input
+                        type="checkbox"
+                        id="refineCurvature"
+                        checked={refineCurvature}
+                        onChange={(e) => setRefineCurvature(e.target.checked)}
+                        className="rounded border-navy-700 bg-navy-950 text-cyan-500 focus:ring-cyan-500 mt-0.5"
+                      />
+                      <label htmlFor="refineCurvature" className="text-[11px] text-slate-300 select-none cursor-pointer leading-tight">
+                        Refine near curvature & sharp edges (computes locally-denser mesh)
+                      </label>
+                    </div>
+
+                    <button
+                      onClick={handleRefineMesh}
+                      disabled={isRefining || !activeProject}
+                      className="w-full py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-semibold rounded-btn transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isRefining ? '🔄 Refining Mesh...' : '🔄 Refine Mesh & Recalculate Quality'}
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    {meshQualityMetrics ? (
+                      <div className="bg-navy-900/40 p-4.5 rounded-card border border-navy-800 space-y-3.5">
+                        <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Detailed Quality Metrics</h4>
+                        <div className="grid grid-cols-2 gap-2 text-[10px]">
+                          <div className="bg-navy-950 p-2 rounded border border-navy-850">
+                            <div className="text-slate-500 font-semibold uppercase">Aspect Ratio (Mean / Max)</div>
+                            <div className="text-xs font-bold font-mono text-slate-200 mt-0.5">
+                              {meshQualityMetrics.aspect_ratio.mean.toFixed(2)} /{' '}
+                              <span className={meshQualityMetrics.aspect_ratio.max > 5 ? 'text-rose-400 font-bold' : 'text-slate-200'}>
+                                {meshQualityMetrics.aspect_ratio.max.toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                          
+                          <div className="bg-navy-950 p-2 rounded border border-navy-850">
+                            <div className="text-slate-500 font-semibold uppercase">Skewness (Mean / Max)</div>
+                            <div className="text-xs font-bold font-mono text-slate-200 mt-0.5">
+                              {meshQualityMetrics.skewness.mean.toFixed(2)} /{' '}
+                              <span className={meshQualityMetrics.skewness.max > 0.8 ? 'text-rose-400 font-bold' : 'text-slate-200'}>
+                                {meshQualityMetrics.skewness.max.toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="bg-navy-950 p-2 rounded border border-navy-850">
+                            <div className="text-slate-500 font-semibold uppercase">Jacobian Ratio (Mean / Max)</div>
+                            <div className="text-xs font-bold font-mono text-slate-200 mt-0.5">
+                              {meshQualityMetrics.jacobian_ratio.mean.toFixed(2)} / {meshQualityMetrics.jacobian_ratio.max.toFixed(2)}
+                            </div>
+                          </div>
+
+                          <div className="bg-navy-950 p-2 rounded border border-navy-850">
+                            <div className="text-slate-500 font-semibold uppercase">Min / Max Angle</div>
+                            <div className="text-xs font-bold font-mono text-slate-200 mt-0.5">
+                              {meshQualityMetrics.angles.min_angle_min.toFixed(1)}° / {meshQualityMetrics.angles.max_angle_max.toFixed(1)}°
+                            </div>
+                          </div>
+                        </div>
+
+                        {meshQualityMetrics.flagged_counts.total_flagged > 0 ? (
+                          <div className="p-2 bg-rose-950/20 border border-rose-900/40 rounded text-[10.5px] text-rose-300">
+                            ⚠️ Warning: {meshQualityMetrics.flagged_counts.total_flagged} elements violate quality thresholds (Aspect Ratio &gt; 5.0, Skewness &gt; 0.8). Recommend smaller element size.
+                          </div>
+                        ) : (
+                          <div className="p-2 bg-emerald-950/20 border border-emerald-900/40 rounded text-[10.5px] text-emerald-300">
+                            ✓ All elements pass standard aspect ratio (&lt; 5.0) and skewness (&lt; 0.8) quality thresholds.
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="bg-navy-900/30 p-8 rounded-card border border-navy-850 border-dashed text-center text-xs text-slate-500">
+                        Detailed quality parameters are generated when you click Refine Mesh.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              {/* Navigation Action Buttons */}
+              <div className="flex justify-end pt-6 mt-6 border-t border-navy-800">
+                <button
+                  className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-semibold rounded-btn transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!activeProject}
+                  onClick={() => setActiveTab('setup')}
+                >
+                  Configure Simulation Setup →
+                </button>
+              </div>
 
             </div>
           )}
@@ -1110,7 +1287,7 @@ export default function Dashboard() {
                     </div>
 
                     <Suspense fallback={<div className="text-slate-400 text-xs">Loading WebGL Contour...</div>}>
-                      <Canvas camera={{ position: [0, 0, 4.2] }}>
+                      <Canvas camera={{ position: [0, 0, 4.2] }} gl={{ preserveDrawingBuffer: true }}>
                         <ambientLight intensity={0.5} />
                         <pointLight position={[10, 10, 10]} />
                         <ResultsMesh mode={resultsMode} />
@@ -1166,13 +1343,36 @@ export default function Dashboard() {
                 </div>
               )}
 
+              {/* Navigation buttons at bottom of results */}
+              <div className="flex justify-between items-center pt-6 mt-6 border-t border-navy-800">
+                <button
+                  className="px-6 py-2.5 bg-navy-800 hover:bg-navy-750 text-slate-300 text-xs font-semibold rounded-btn transition-all"
+                  onClick={() => setActiveTab('setup')}
+                >
+                  ← Back to Setup
+                </button>
+                <button
+                  className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-semibold rounded-btn transition-all"
+                  onClick={() => setActiveTab('chat')}
+                >
+                  Consult AI Assistant →
+                </button>
+              </div>
+
             </div>
           )}
 
           {activeTab === 'chat' && (
-            <div className="bg-navy-900 border border-navy-850 rounded-card p-6 shadow-xl h-[550px] flex flex-col justify-between overflow-hidden">
-              
-              <div className="flex items-center justify-between pb-4 border-b border-navy-800 mb-4">
+            <div className="bg-navy-900 border border-navy-850 rounded-card p-6 shadow-xl h-[550px] flex flex-col justify-between overflow-hidden relative">
+              <div className="absolute top-4 left-4 z-10">
+                <button
+                  className="px-3 py-1 bg-navy-850 hover:bg-navy-800 text-slate-300 text-[10px] font-semibold rounded transition-all border border-navy-800"
+                  onClick={() => setActiveTab('results')}
+                >
+                  ← Back to Results
+                </button>
+              </div>
+              <div className="flex items-center justify-between pb-4 border-b border-navy-800 mb-4 pl-24">
                 <h3 className="font-bold text-sm text-white flex items-center gap-2">
                   💬 Gemini AI Assistant Engineering Chat
                 </h3>

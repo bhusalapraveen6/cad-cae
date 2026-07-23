@@ -1,10 +1,33 @@
-import { useEffect, useState, useRef, Suspense } from 'react'
+import { useEffect, useState, useRef, Suspense, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Canvas, useFrame } from '@react-three/fiber'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls, Grid, Environment } from '@react-three/drei'
 import * as THREE from 'three'
 import api, { getResults, type AnalysisResult, type ResultSummary } from '@/api/client'
 import { useStore } from '@/store'
+
+// WebGL Canvas Capture Component
+function CanvasCapturer({ onCapture }: { onCapture: (url: string) => void }) {
+  const { gl, scene, camera } = useThree()
+  
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      try {
+        gl.render(scene, camera)
+        const dataUrl = gl.domElement.toDataURL('image/png')
+        if (dataUrl && dataUrl.length > 1000) {
+          onCapture(dataUrl)
+        }
+      } catch (err) {
+        console.error('Failed to capture WebGL Canvas:', err)
+      }
+    }, 1200) // Wait for render to load
+    
+    return () => clearTimeout(handle)
+  }, [gl, scene, camera, onCapture])
+  
+  return null
+}
 
 // ── Colormap: jet (blue→green→red) ──────────────────────────────────────────
 function jetColor(t: number): THREE.Color {
@@ -248,6 +271,28 @@ export default function ResultsPage() {
   const [sliceAxis, setSliceAxis] = useState<string>('None')
   const [sliceVal, setSliceVal] = useState<number>(0)
 
+  // Image capture states
+  const [capturedImageUrl, setCapturedImageUrl] = useState<string | null>(null)
+  const [isCapturing, setIsCapturing] = useState(false)
+  const [captureError, setCaptureError] = useState('')
+  const [imageUploaded, setImageUploaded] = useState(false)
+
+  const handleCapture = useCallback(async (dataUrl: string) => {
+    if (imageUploaded) return
+    setIsCapturing(true)
+    setCapturedImageUrl(dataUrl)
+    try {
+      const { uploadReportImage } = await import('@/api/client')
+      await uploadReportImage(jobId!, dataUrl)
+      setImageUploaded(true)
+    } catch (err) {
+      console.error('Failed to upload report image', err)
+      setCaptureError('Failed to sync preview with report generator.')
+    } finally {
+      setIsCapturing(false)
+    }
+  }, [jobId, imageUploaded])
+
   const job = jobs.find(j => j.id === jobId)
 
   useEffect(() => {
@@ -309,7 +354,7 @@ export default function ResultsPage() {
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
           {/* ── 3D Viewer (left) ── */}
           <div style={{ flex: 1, position: 'relative', background: 'var(--bg-deep)' }}>
-            <Canvas camera={{ position: [2, 1.5, 2], fov: 50 }} shadows gl={{ localClippingEnabled: true }}>
+            <Canvas camera={{ position: [2, 1.5, 2], fov: 50 }} shadows gl={{ localClippingEnabled: true, preserveDrawingBuffer: true }}>
               <ambientLight intensity={0.4} />
               <directionalLight position={[5, 5, 5]} intensity={1} castShadow />
               <directionalLight position={[-3, 3, -3]} intensity={0.3} />
@@ -320,6 +365,7 @@ export default function ResultsPage() {
                 )}
                 <Grid args={[10, 10]} cellColor="rgba(41,121,255,0.05)" sectionColor="rgba(41,121,255,0.1)" />
                 <Environment preset="city" />
+                <CanvasCapturer onCapture={handleCapture} />
               </Suspense>
               <OrbitControls makeDefault />
             </Canvas>
@@ -622,6 +668,38 @@ export default function ResultsPage() {
                     >
                       <span>▤</span> Export as DOCX
                     </button>
+                  </div>
+                  <div className="divider" />
+                  
+                  {/* Results visualization image preview */}
+                  <div className="section-label mb-sm">Visual Contour Preview</div>
+                  <div style={{
+                    background: 'var(--bg-deep)', borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-subtle)', minHeight: 180,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    overflow: 'hidden', position: 'relative', marginBottom: 'var(--space-md)'
+                  }}>
+                    {isCapturing ? (
+                      <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
+                        <div style={{ fontSize: 24, marginBottom: 8 }}>⏳</div>
+                        <div style={{ fontSize: 11 }}>Capturing 3D results mesh...</div>
+                      </div>
+                    ) : captureError ? (
+                      <div style={{ textAlign: 'center', padding: 'var(--space-md)', color: 'var(--accent-red)' }}>
+                        <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
+                        <div style={{ fontSize: 11 }}>{captureError}</div>
+                      </div>
+                    ) : capturedImageUrl ? (
+                      <img
+                        src={capturedImageUrl}
+                        alt="Contour Plot"
+                        style={{ width: '100%', height: 'auto', display: 'block' }}
+                      />
+                    ) : (
+                      <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 11 }}>
+                        Waiting for WebGL renderer to initialize...
+                      </div>
+                    )}
                   </div>
                   <div className="divider" />
                   <div className="section-label mb-sm">Raw Result Data</div>

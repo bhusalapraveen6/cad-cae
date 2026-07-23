@@ -306,4 +306,32 @@ export const deleteApiKey = async (): Promise<{ has_key: boolean }> => {
   return data
 }
 
+export const refineMesh = async (
+  projectId: string,
+  globalElementSize: number,
+  refineCurvature: boolean,
+): Promise<{
+  success: boolean
+  element_count: number
+  node_count: number
+  mesh_quality: number
+  mesh_quality_metrics: Record<string, any>
+}> => {
+  const { data } = await api.post(`/projects/${projectId}/mesh/refine`, {
+    global_element_size: globalElementSize,
+    refine_curvature: refineCurvature,
+  })
+  return data
+}
+
+export const uploadReportImage = async (
+  jobId: string,
+  imageData: string,
+): Promise<{ success: boolean; path: string }> => {
+  const { data } = await api.post(`/jobs/${jobId}/results/report-image`, {
+    image_data: imageData,
+  })
+  return data
+}
+
 export default api

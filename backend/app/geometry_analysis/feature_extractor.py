@@ -106,6 +106,9 @@ def extract_features(geom: GeometryData) -> GeometryFeatures:
     # ── Slender ───────────────────────────────────────────────────────────────
     is_slender = slenderness > SLENDERNESS_HIGH
 
+    from app.geometry_analysis.mesh_quality import compute_mesh_quality
+    quality_data = compute_mesh_quality(geom.vertices, geom.faces)
+
     raw = {
         "bbox_x_mm": dx,
         "bbox_y_mm": dy,
@@ -117,6 +120,7 @@ def extract_features(geom: GeometryData) -> GeometryFeatures:
         "thin_wall_ratio": round(thin_wall_ratio, 3),
         "is_watertight": geom.is_watertight,
         "num_components": geom.num_components,
+        "mesh_quality_metrics": quality_data,
     }
 
     features = GeometryFeatures(
@@ -133,6 +137,9 @@ def extract_features(geom: GeometryData) -> GeometryFeatures:
         has_symmetry=has_symmetry,
         is_sheet_metal=is_sheet_metal,
         is_slender=is_slender,
+        element_count=len(geom.faces) if geom.faces is not None else 0,
+        node_count=len(geom.vertices) if geom.vertices is not None else 0,
+        mesh_quality=quality_data["overall_quality_score"],
         raw=raw,
     )
 
@@ -143,6 +150,9 @@ def extract_features(geom: GeometryData) -> GeometryFeatures:
         holes=has_holes,
         cavity=has_internal_cavity,
         symmetry=has_symmetry,
+        elements=len(geom.faces) if geom.faces is not None else 0,
+        nodes=len(geom.vertices) if geom.vertices is not None else 0,
+        mesh_quality=round(quality_data["overall_quality_score"], 4),
     )
 
     return features

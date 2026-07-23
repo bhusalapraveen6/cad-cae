@@ -326,9 +326,17 @@ async def get_suggestions(
     return {"suggestions": g.suggestions or []}
 
 
+from pydantic import BaseModel
+
+class MeshRefineRequest(BaseModel):
+    global_element_size: float
+    refine_curvature: bool
+
+
 @projects_router.get("/{project_id}/mesh")
 async def get_project_mesh(
     project_id: str,
+    global_element_size: Optional[float] = None,
     db: AsyncSession = Depends(get_db),
     current_user: M.User = Depends(get_current_user),
 ):
@@ -341,9 +349,22 @@ async def get_project_mesh(
     if not path.exists():
         raise HTTPException(404, "CAD file not found on disk")
         
+    g = (await db.execute(
+        select(M.GeometryFeatures).where(M.GeometryFeatures.project_id == project_id)
+    )).scalar_one_or_none()
+
+    element_size = global_element_size
+    if element_size is None and g and g.raw_features:
+        element_size = g.raw_features.get("mesh_settings", {}).get("global_element_size")
+    if element_size is None:
+        element_size = 5.0
+
+    if g and g.raw_features and g.raw_features.get("mesh_settings", {}).get("refine_curvature"):
+        element_size = element_size * 0.5
+
     try:
         from app.cad_import.parser import parse_cad_file
-        geom_data = await parse_cad_file(path)
+        geom_data = await parse_cad_file(path, deflection=element_size)
         
         # Serialize vertices and faces
         verts = geom_data.vertices.tolist() if geom_data.vertices is not None else []
@@ -357,6 +378,68 @@ async def get_project_mesh(
         }
     except Exception as e:
         raise HTTPException(500, detail=f"Failed to load mesh: {e}")
+
+
+@projects_router.post("/{project_id}/mesh/refine")
+async def refine_project_mesh(
+    project_id: str,
+    body: MeshRefineRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: M.User = Depends(get_current_user),
+):
+    p = await _get_project_verified(project_id, db, current_user.id)
+    if not p.cad_file_path:
+        raise HTTPException(404, "Project or CAD file not found")
+        
+    g = (await db.execute(
+        select(M.GeometryFeatures).where(M.GeometryFeatures.project_id == project_id)
+    )).scalar_one_or_none()
+    if not g:
+        raise HTTPException(404, "Geometry features not found")
+        
+    from pathlib import Path
+    path = Path(p.cad_file_path)
+    if not path.exists():
+        raise HTTPException(404, "CAD file not found on disk")
+        
+    try:
+        from app.cad_import.parser import parse_cad_file
+        from app.geometry_analysis.feature_extractor import extract_features
+        
+        deflection = body.global_element_size
+        if body.refine_curvature:
+            deflection = deflection * 0.5
+            
+        geom_data = await parse_cad_file(path, deflection=deflection)
+        features = extract_features(geom_data)
+        
+        g.element_count = features.element_count
+        g.node_count = features.node_count
+        g.mesh_quality = features.mesh_quality
+        
+        raw = g.raw_features or {}
+        raw["mesh_settings"] = {
+            "global_element_size": body.global_element_size,
+            "refine_curvature": body.refine_curvature
+        }
+        raw["mesh_quality_metrics"] = features.raw.get("mesh_quality_metrics")
+        g.raw_features = raw
+        
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(g, "raw_features")
+        
+        await db.commit()
+        
+        return {
+            "success": True,
+            "element_count": g.element_count,
+            "node_count": g.node_count,
+            "mesh_quality": g.mesh_quality,
+            "mesh_quality_metrics": raw["mesh_quality_metrics"]
+        }
+    except Exception as e:
+        raise HTTPException(500, detail=f"Mesh refinement failed: {e}")
+
 
 
 # ── Analysis / Jobs ─────────────────────────────────────────────────────────────
@@ -541,6 +624,42 @@ async def get_results(
         report_docx_available=bool(r.report_docx_path),
         result_data=r.result_data,
     )
+
+
+class ReportImageUpload(BaseModel):
+    image_data: str  # base64 data URL
+
+
+@results_router.post("/report-image")
+async def upload_report_image(
+    job_id: str,
+    body: ReportImageUpload,
+    db: AsyncSession = Depends(get_db),
+    current_user: M.User = Depends(get_current_user),
+):
+    await _get_job_verified(job_id, db, current_user.id)
+    
+    # Extract base64 part
+    data = body.image_data
+    if "," in data:
+        data = data.split(",", 1)[1]
+        
+    import base64
+    try:
+        img_bytes = base64.b64decode(data)
+    except Exception as e:
+        raise HTTPException(400, detail=f"Invalid base64 image data: {e}")
+        
+    storage_dir = Path(settings.local_storage_path) / "reports"
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    image_path = storage_dir / f"{job_id}_contour.png"
+    
+    try:
+        image_path.write_bytes(img_bytes)
+        logger.info("Saved report contour image", path=str(image_path))
+        return {"success": True, "path": str(image_path)}
+    except Exception as e:
+        raise HTTPException(500, detail=f"Failed to write image: {e}")
 
 
 @results_router.get("/pdf")
