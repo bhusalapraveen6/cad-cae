@@ -151,7 +151,16 @@ class InletBC(BaseModel):
     description: str = ""
 
 
-BoundaryCondition = Union[FixedSupport, Force, Pressure, HeatFlux, Convection, InletBC]
+class PrescribedDisplacement(BaseModel):
+    type: Literal["displacement"] = "displacement"
+    face_ids: List[int] = Field(default_factory=list)
+    dx: Union[float, Literal["free"]] = "free"
+    dy: Union[float, Literal["free"]] = "free"
+    dz: Union[float, Literal["free"]] = "free"
+    description: str = ""
+
+
+BoundaryCondition = Union[FixedSupport, Force, Pressure, HeatFlux, Convection, InletBC, PrescribedDisplacement]
 
 
 # ── Analysis Parameters ────────────────────────────────────────────────────────
@@ -299,6 +308,8 @@ class UploadResponse(BaseModel):
     filename: str
     file_format: str
     file_size: int
+    parsing_status: str = "success"
+    error_message: Optional[str] = None
     geometry_features: Optional[GeometryFeaturesResponse] = None
     suggestions: List[AnalysisSuggestion] = Field(default_factory=list)
 

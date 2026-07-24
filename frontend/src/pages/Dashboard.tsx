@@ -17,6 +17,9 @@ import {
   Plus,
   Trash,
   Play,
+  Pause,
+  Video,
+  RefreshCw,
   FileText,
   Info,
   Brain,
@@ -70,9 +73,124 @@ function jetColor(t: number): THREE.Color {
   return c
 }
 
-// ── Animated Wireframe Mesh for Preview ──
-function WireframeMesh({ rotate = true, projectId }: { rotate?: boolean; projectId?: string }) {
-  const meshRef = useRef<THREE.Mesh>(null!)
+// ── Helper to compute face centroid & normal ──
+function getFaceCentroidAndNormal(vertices: number[][], faces: number[][], faceId: number) {
+  const face = faces[faceId]
+  if (!face) return null
+  
+  const v0 = new THREE.Vector3(...vertices[face[0]])
+  const v1 = new THREE.Vector3(...vertices[face[1]])
+  const v2 = new THREE.Vector3(...vertices[face[2]])
+  
+  const centroid = new THREE.Vector3().addVectors(v0, v1).add(v2).divideScalar(3)
+  const edge1 = new THREE.Vector3().subVectors(v1, v0)
+  const edge2 = new THREE.Vector3().subVectors(v2, v0)
+  const normal = new THREE.Vector3().crossVectors(edge1, edge2).normalize()
+  
+  return { centroid, normal }
+}
+
+// ── 3D Glyphs for Boundary Conditions ──
+function BCGlyphs({
+  boundaryConditions,
+  meshData
+}: {
+  boundaryConditions: any[]
+  meshData: { vertices: number[][]; faces: number[][] } | null
+}) {
+  if (!meshData || !boundaryConditions) return null
+
+  return (
+    <group>
+      {boundaryConditions.flatMap((bc, idx) => {
+        const faceIds = bc.face_ids || []
+        return faceIds.map((faceId: number) => {
+          const geom = getFaceCentroidAndNormal(meshData.vertices, meshData.faces, faceId)
+          if (!geom) return null
+          const { centroid, normal } = geom
+
+          if (bc.type === 'fixed') {
+            return (
+              <mesh key={`fixed-${idx}-${faceId}`} position={centroid}>
+                <sphereGeometry args={[0.08, 8, 8]} />
+                <meshBasicMaterial color="#10b981" />
+              </mesh>
+            )
+          } else if (bc.type === 'force') {
+            const forceVec = new THREE.Vector3(bc.fx || 0, bc.fy || 0, bc.fz || 0)
+            const magnitude = forceVec.length()
+            if (magnitude === 0) return null
+            const dir = forceVec.clone().normalize()
+            const length = 0.3 + Math.log10(magnitude + 1) * 0.25
+            return (
+              <primitive
+                key={`force-${idx}-${faceId}`}
+                object={new THREE.ArrowHelper(dir, centroid, length, '#f43f5e', 0.15, 0.08)}
+              />
+            )
+          } else if (bc.type === 'pressure') {
+            const magnitude = Math.abs(bc.magnitude || 0)
+            if (magnitude === 0) return null
+            const dir = normal.clone().multiplyScalar(-1)
+            const length = 0.3 + Math.log10(magnitude * 1000 + 1) * 0.25
+            return (
+              <primitive
+                key={`pressure-${idx}-${faceId}`}
+                object={new THREE.ArrowHelper(dir, centroid, length, '#f97316', 0.15, 0.08)}
+              />
+            )
+          } else if (bc.type === 'displacement') {
+            return (
+              <mesh key={`disp-${idx}-${faceId}`} position={centroid}>
+                <boxGeometry args={[0.08, 0.08, 0.08]} />
+                <meshBasicMaterial color="#06b6d4" />
+              </mesh>
+            )
+          } else if (bc.type === 'heat_flux' || bc.type === 'convection') {
+            return (
+              <mesh key={`thermal-${idx}-${faceId}`} position={centroid}>
+                <coneGeometry args={[0.06, 0.12, 4]} />
+                <meshBasicMaterial color="#ef4444" />
+              </mesh>
+            )
+          } else if (bc.type === 'inlet') {
+            const dir = normal.clone()
+            const length = 0.3 + Math.log10((bc.velocity || 1) * 10 + 1) * 0.2
+            return (
+              <primitive
+                key={`inlet-${idx}-${faceId}`}
+                object={new THREE.ArrowHelper(dir, centroid, length, '#a855f7', 0.15, 0.08)}
+              />
+            )
+          }
+          return null
+        })
+      })}
+    </group>
+  )
+}
+
+// ── Interactive Mesh for Preview ──
+function WireframeMesh({
+  rotate = true,
+  projectId,
+  reloadTrigger = 0,
+  shadingMode = 'both',
+  meshColor = '#22d3ee',
+  selectedFaces = [],
+  onFaceClick,
+  boundaryConditions = []
+}: {
+  rotate?: boolean
+  projectId?: string
+  reloadTrigger?: number
+  shadingMode?: 'solid' | 'wireframe' | 'both'
+  meshColor?: string
+  selectedFaces?: number[]
+  onFaceClick?: (faceId: number) => void
+  boundaryConditions?: any[]
+}) {
+  const meshRef = useRef<THREE.Group>(null!)
   const [meshData, setMeshData] = useState<{ vertices: number[][]; faces: number[][] } | null>(null)
 
   useEffect(() => {
@@ -88,7 +206,7 @@ function WireframeMesh({ rotate = true, projectId }: { rotate?: boolean; project
         console.error('Failed to fetch project mesh:', err)
         setMeshData(null)
       })
-  }, [projectId])
+  }, [projectId, reloadTrigger])
 
   useFrame((state) => {
     if (rotate && meshRef.current) {
@@ -113,57 +231,291 @@ function WireframeMesh({ rotate = true, projectId }: { rotate?: boolean; project
     return geometry
   }, [meshData])
 
-  if (!bufferGeometry) {
+  const highlightGeometry = useMemo(() => {
+    if (!meshData || !selectedFaces.length) return null
+
+    const geom = new THREE.BufferGeometry()
+    const vertices: number[] = []
+    const indices: number[] = []
+
+    selectedFaces.forEach((faceId, idx) => {
+      const face = meshData.faces[faceId]
+      if (!face) return
+
+      const v0 = meshData.vertices[face[0]]
+      const v1 = meshData.vertices[face[1]]
+      const v2 = meshData.vertices[face[2]]
+
+      vertices.push(...v0, ...v1, ...v2)
+      indices.push(idx * 3, idx * 3 + 1, idx * 3 + 2)
+    })
+
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
+    geom.setIndex(indices)
+    geom.computeVertexNormals()
+    return geom
+  }, [meshData, selectedFaces])
+
+  if (!projectId || projectId.startsWith('demo') || projectId.startsWith('proj')) {
     return (
-      <mesh ref={meshRef}>
+      <mesh>
         <torusKnotGeometry args={[1.6, 0.5, 120, 16, 2, 3]} />
-        <meshBasicMaterial color="#22d3ee" wireframe={true} transparent={true} opacity={0.65} />
+        <meshBasicMaterial color={meshColor} wireframe={true} transparent={true} opacity={0.65} />
       </mesh>
     )
   }
 
+  if (!bufferGeometry) return null
+
   return (
-    <mesh ref={meshRef} geometry={bufferGeometry}>
-      <meshStandardMaterial color="#22d3ee" wireframe={true} />
-    </mesh>
+    <group ref={meshRef}>
+      {(shadingMode === 'solid' || shadingMode === 'both') && (
+        <mesh
+          geometry={bufferGeometry}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (onFaceClick && e.faceIndex !== undefined) {
+              onFaceClick(e.faceIndex)
+            }
+          }}
+        >
+          <meshStandardMaterial
+            color={meshColor}
+            roughness={0.4}
+            metalness={0.2}
+            polygonOffset={shadingMode === 'both'}
+            polygonOffsetFactor={1}
+            polygonOffsetUnits={1}
+          />
+        </mesh>
+      )}
+
+      {(shadingMode === 'wireframe' || shadingMode === 'both') && (
+        <mesh
+          geometry={bufferGeometry}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (onFaceClick && e.faceIndex !== undefined) {
+              onFaceClick(e.faceIndex)
+            }
+          }}
+        >
+          <meshBasicMaterial
+            color={shadingMode === 'wireframe' ? meshColor : '#0f172a'}
+            wireframe={true}
+            transparent={true}
+            opacity={shadingMode === 'wireframe' ? 1.0 : 0.4}
+          />
+        </mesh>
+      )}
+
+      {highlightGeometry && (
+        <mesh geometry={highlightGeometry}>
+          <meshBasicMaterial color="#eab308" transparent={true} opacity={0.6} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+
+      <BCGlyphs boundaryConditions={boundaryConditions} meshData={meshData} />
+    </group>
   )
 }
 
-// ── Jet Colored Stress/Deformation Results Mesh ──
-function ResultsMesh({ mode = 'stress' }: { mode: string }) {
-  const meshRef = useRef<THREE.Mesh>(null!)
+// ── Results Mesh for Playback Contours ──
+function ResultsMesh({
+  projectId,
+  results,
+  mode = 'stress',
+  isPlaying = false,
+  speed = 1.0,
+  currentFrame = 0,
+  setCurrentFrame,
+  selectedModeIndex = 0
+}: {
+  projectId?: string
+  results: any
+  mode?: 'stress' | 'displacement' | 'temperature'
+  isPlaying?: boolean
+  speed?: number
+  currentFrame: number
+  setCurrentFrame: (frame: number) => void
+  selectedModeIndex?: number
+}) {
+  const groupRef = useRef<THREE.Group>(null!)
+  const [meshData, setMeshData] = useState<{ vertices: number[][]; faces: number[][] } | null>(null)
+  const lastTimeRef = useRef<number>(0)
+
+  useEffect(() => {
+    if (!projectId || projectId.startsWith('demo')) return
+    getMesh(projectId)
+      .then(setMeshData)
+      .catch(console.error)
+  }, [projectId])
+
+  const frames = useMemo(() => {
+    if (!results || !results.result_data) return []
+    if (results.result_data.modes) {
+      const modeData = results.result_data.modes[selectedModeIndex]
+      return modeData ? modeData.frames : []
+    }
+    return results.result_data.frames || []
+  }, [results, selectedModeIndex])
+
+  const cfdData = useMemo(() => {
+    if (!results || !results.result_data) return null
+    return results.result_data.cfd_data || null
+  }, [results])
+
+  const frameData = useMemo(() => {
+    if (!frames || frames.length === 0) return null
+    return frames[Math.min(currentFrame, frames.length - 1)] || null
+  }, [frames, currentFrame])
 
   useFrame((state) => {
-    if (meshRef.current) {
-      meshRef.current.rotation.y = state.clock.getElapsedTime() * 0.08
+    if (isPlaying && frames.length > 0) {
+      const elapsed = state.clock.getElapsedTime()
+      if (elapsed - lastTimeRef.current > 0.15 / speed) {
+        lastTimeRef.current = elapsed
+        setCurrentFrame((currentFrame + 1) % frames.length)
+      }
+    }
+    if (groupRef.current) {
+      groupRef.current.rotation.y = state.clock.getElapsedTime() * 0.05
     }
   })
 
-  const geometry = useMemo(() => {
-    const geo = new THREE.TorusKnotGeometry(1.5, 0.45, 150, 20, 3, 4)
-    const count = geo.attributes.position.count
-    const colors = []
+  const deformedGeometry = useMemo(() => {
+    if (!meshData || !meshData.vertices.length) return null
 
-    for (let i = 0; i < count; i++) {
-      const y = geo.attributes.position.getY(i)
-      const x = geo.attributes.position.getX(i)
-      // Generates mock stress concentrations near geometry details
-      const factor = mode === 'stress' 
-        ? Math.abs(Math.sin(x * 1.5 + y * 2.5)) 
-        : Math.abs(Math.cos(y * 2.0))
-      
-      const c = jetColor(factor)
-      colors.push(c.r, c.g, c.b)
+    const geom = new THREE.BufferGeometry()
+    const vertexCount = meshData.vertices.length
+    
+    const positions = new Float32Array(vertexCount * 3)
+    const colors = new Float32Array(vertexCount * 3)
+
+    for (let i = 0; i < vertexCount; i++) {
+      positions[i * 3] = meshData.vertices[i][0]
+      positions[i * 3 + 1] = meshData.vertices[i][1]
+      positions[i * 3 + 2] = meshData.vertices[i][2]
     }
 
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
-    return geo
-  }, [mode])
+    if (frameData) {
+      const hasDisplacement = Array.isArray(frameData.displacement) && frameData.displacement.length === vertexCount
+      const hasStress = Array.isArray(frameData.stress) && frameData.stress.length === vertexCount
+      const hasTemp = Array.isArray(frameData.temperature) && frameData.temperature.length === vertexCount
+
+      const scale = 20.0 
+
+      for (let i = 0; i < vertexCount; i++) {
+        if (hasDisplacement) {
+          const dx = frameData.displacement[i][0] * scale
+          const dy = frameData.displacement[i][1] * scale
+          const dz = frameData.displacement[i][2] * scale
+          positions[i * 3] += dx
+          positions[i * 3 + 1] += dy
+          positions[i * 3 + 2] += dz
+        }
+
+        let value = 0.0
+        if (mode === 'displacement' && hasDisplacement) {
+          const dx = frameData.displacement[i][0]
+          const dy = frameData.displacement[i][1]
+          const dz = frameData.displacement[i][2]
+          value = Math.sqrt(dx*dx + dy*dy + dz*dz)
+        } else if (mode === 'temperature' && hasTemp) {
+          value = frameData.temperature[i]
+        } else if (hasStress) {
+          value = frameData.stress[i]
+        }
+
+        let t = 0.0
+        if (mode === 'displacement') {
+          const maxVal = results?.summary?.max_displacement || 1.0
+          t = Math.min(1.0, value / (maxVal || 1e-5))
+        } else if (mode === 'temperature') {
+          const maxVal = results?.summary?.max_temperature || 100.0
+          const minVal = results?.summary?.min_temperature || 20.0
+          t = Math.min(1.0, Math.max(0.0, (value - minVal) / (maxVal - minVal + 1e-5)))
+        } else {
+          const maxVal = results?.summary?.max_stress || 250.0
+          t = Math.min(1.0, value / (maxVal || 1e-5))
+        }
+
+        const col = jetColor(t)
+        colors[i * 3] = col.r
+        colors[i * 3 + 1] = col.g
+        colors[i * 3 + 2] = col.b
+      }
+    } else {
+      for (let i = 0; i < vertexCount; i++) {
+        const col = jetColor(i / vertexCount)
+        colors[i * 3] = col.r
+        colors[i * 3 + 1] = col.g
+        colors[i * 3 + 2] = col.b
+      }
+    }
+
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    geom.setIndex(new THREE.BufferAttribute(new Uint32Array(meshData.faces.flat()), 1))
+    geom.computeVertexNormals()
+
+    return geom
+  }, [meshData, frameData, mode, results])
+
+  const cfdArrows = useMemo(() => {
+    if (!cfdData || !cfdData.sample_points) return null
+    return (
+      <group>
+        {cfdData.sample_points.map((pt: number[], idx: number) => {
+          const vec = cfdData.velocity_vectors[idx]
+          if (!vec) return null
+          const dir = new THREE.Vector3(...vec).normalize()
+          const mag = new THREE.Vector3(...vec).length()
+          const origin = new THREE.Vector3(...pt)
+          const length = 0.15 + Math.log10(mag + 1) * 0.1
+          return (
+            <primitive
+              key={`cfd-arrow-${idx}`}
+              object={new THREE.ArrowHelper(dir, origin, length, '#3b82f6', 0.05, 0.03)}
+            />
+          )
+        })}
+      </group>
+    )
+  }, [cfdData])
+
+  if (!projectId || projectId.startsWith('demo')) {
+    const torusGeometry = useMemo(() => {
+      const geo = new THREE.TorusKnotGeometry(1.5, 0.45, 150, 20, 3, 4)
+      const count = geo.attributes.position.count
+      const colors = []
+      for (let i = 0; i < count; i++) {
+        const y = geo.attributes.position.getY(i)
+        const x = geo.attributes.position.getX(i)
+        const factor = mode === 'displacement' ? Math.abs(Math.cos(y * 2.0)) : Math.abs(Math.sin(x * 1.5 + y * 2.5))
+        const c = jetColor(factor)
+        colors.push(c.r, c.g, c.b)
+      }
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+      return geo
+    }, [mode])
+
+    return (
+      <mesh ref={groupRef} geometry={torusGeometry}>
+        <meshPhongMaterial vertexColors={true} side={THREE.DoubleSide} shininess={40} flatShading={true} />
+      </mesh>
+    )
+  }
+
+  if (!deformedGeometry) return null
 
   return (
-    <mesh ref={meshRef} geometry={geometry}>
-      <meshPhongMaterial vertexColors={true} side={THREE.DoubleSide} shininess={40} flatShading={true} />
-    </mesh>
+    <group ref={groupRef}>
+      <mesh geometry={deformedGeometry}>
+        <meshPhongMaterial vertexColors={true} side={THREE.DoubleSide} shininess={40} flatShading={true} />
+      </mesh>
+      {cfdArrows}
+    </group>
   )
 }
 
@@ -189,15 +541,28 @@ export default function Dashboard() {
   const [isUploading, setIsUploading] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   
+  // Viewport and customizable states
+  const [shadingMode, setShadingMode] = useState<'solid' | 'wireframe' | 'both'>('both')
+  const [meshColor, setMeshColor] = useState(() => localStorage.getItem('cae_mesh_color') || '#22d3ee')
+  const [viewportBg, setViewportBg] = useState(() => localStorage.getItem('cae_viewport_bg') || '#020617')
+  const [meshReloadTrigger, setMeshReloadTrigger] = useState(0)
+
   // Simulation Setup states
   const [materials, setMaterials] = useState<Material[]>([])
   const [selectedMaterial, setSelectedMaterial] = useState<Material | null>(null)
   const [isSimulating, setIsSimulating] = useState(false)
-  const [boundaryCondition, setBoundaryCondition] = useState({
-    fixedFace: 'Face 12 (Base)',
-    forceFace: 'Face 4 (Top Edge)',
-    forceMagnitude: '5000'
-  })
+  
+  const [boundaryConditions, setBoundaryConditions] = useState<any[]>([
+    { type: 'fixed', face_ids: [1, 2], description: 'Fixed Constraint' },
+    { type: 'force', face_ids: [3], fx: 0, fy: 0, fz: -5000, description: 'Load Constraint' }
+  ])
+  const [activeBcIdx, setActiveBcIdx] = useState<number | null>(null)
+
+  // Results playback states
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0)
+  const [currentFrameIndex, setCurrentFrameIndex] = useState(0)
+  const [selectedModeIndex, setSelectedModeIndex] = useState(0)
 
   // Chat states
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([
@@ -272,6 +637,7 @@ export default function Dashboard() {
           mesh_quality: res.mesh_quality
         } : null)
         setMeshQualityMetrics(res.mesh_quality_metrics)
+        setMeshReloadTrigger(t => t + 1)
         store.addToast('success', 'Mesh local density refined successfully!')
       }
     } catch (e: any) {
@@ -301,6 +667,7 @@ export default function Dashboard() {
           mesh_quality: res.mesh_quality
         } : null)
         setMeshQualityMetrics(res.mesh_quality_metrics)
+        setMeshReloadTrigger(t => t + 1)
         store.addToast('success', 'Mesh vertices moved successfully!')
       }
     } catch (e: any) {
@@ -339,6 +706,7 @@ export default function Dashboard() {
           mesh_quality: res.mesh_quality
         } : null)
         setMeshQualityMetrics(res.mesh_quality_metrics)
+        setMeshReloadTrigger(t => t + 1)
         store.addToast('success', 'Mesh element split successfully!')
       }
     } catch (e: any) {
@@ -366,6 +734,7 @@ export default function Dashboard() {
           mesh_quality: res.mesh_quality
         } : null)
         setMeshQualityMetrics(res.mesh_quality_metrics)
+        setMeshReloadTrigger(t => t + 1)
         store.addToast('success', 'Mesh sub-region replaced successfully!')
       }
     } catch (e: any) {
@@ -395,6 +764,7 @@ export default function Dashboard() {
           mesh_quality: res.mesh_quality
         } : null)
         setMeshQualityMetrics(res.mesh_quality_metrics)
+        setMeshReloadTrigger(t => t + 1)
         store.addToast('success', 'Mesh smoothed successfully!')
       }
     } catch (e: any) {
@@ -417,6 +787,7 @@ export default function Dashboard() {
           mesh_quality: res.mesh_quality
         } : null)
         setMeshQualityMetrics(res.mesh_quality_metrics)
+        setMeshReloadTrigger(t => t + 1)
         store.addToast('success', 'Mesh rebuilt and reset successfully!')
       }
     } catch (e: any) {
@@ -768,6 +1139,7 @@ export default function Dashboard() {
           mesh_quality: res.mesh_quality
         } : null)
         setMeshQualityMetrics(res.mesh_quality_metrics)
+        setMeshReloadTrigger(t => t + 1)
         store.addToast('success', 'Mesh refinement completed!')
       }
     } catch (e: any) {
@@ -799,10 +1171,7 @@ export default function Dashboard() {
             refine_curvature: refineCurvature,
             element_order: 2
           },
-          boundary_conditions: [
-            { type: 'fixed', face_ids: [1, 2], description: boundaryCondition.fixedFace },
-            { type: 'force', fz: -parseFloat(boundaryCondition.forceMagnitude || '1000'), face_ids: [3], description: boundaryCondition.forceFace }
-          ]
+          boundary_conditions: boundaryConditions
         }
       )
       
@@ -942,12 +1311,14 @@ export default function Dashboard() {
           </section>
 
           {/* Customize interface */}
-          <section className="space-y-3">
+          <section className="space-y-4 border-t border-navy-800 pt-4">
             <h3 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider flex items-center gap-2">
-              <Activity className="w-3.5 h-3.5" /> 🎨 Customize Interface
+              <Activity className="w-3.5 h-3.5" /> 🎨 Viewport & Theme Customizer
             </h3>
+            
+            {/* Theme Selection */}
             <div>
-              <label className="block text-[11px] text-slate-400 font-medium mb-1">Theme Mode</label>
+              <label className="block text-[10px] text-slate-400 font-medium mb-1">Theme Mode</label>
               <div className="relative">
                 <select
                   value={theme === 'dark' ? 'Dark Mode' : 'Light Mode'}
@@ -960,6 +1331,89 @@ export default function Dashboard() {
                 <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-2.5 pointer-events-none" />
               </div>
             </div>
+
+            {/* Shading Mode Selection */}
+            <div>
+              <label className="block text-[10px] text-slate-400 font-medium mb-1">Mesh Shading Mode</label>
+              <div className="relative">
+                <select
+                  value={shadingMode}
+                  onChange={(e) => setShadingMode(e.target.value as any)}
+                  className="w-full bg-navy-950 border border-navy-800 rounded-btn px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-400 cursor-pointer appearance-none"
+                >
+                  <option value="solid">Solid Shading</option>
+                  <option value="wireframe">Wireframe Only</option>
+                  <option value="both">Solid + Wireframe Overlay</option>
+                </select>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-2.5 pointer-events-none" />
+              </div>
+            </div>
+
+            {/* Mesh Material Preset colors */}
+            <div>
+              <label className="block text-[10px] text-slate-400 font-medium mb-1">Mesh Base Color</label>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                  { label: 'Grey', color: '#64748b' },
+                  { label: 'Blue', color: '#3b82f6' },
+                  { label: 'Orange', color: '#f97316' },
+                  { label: 'Teal', color: '#22d3ee' }
+                ].map((preset) => (
+                  <button
+                    key={preset.label}
+                    onClick={() => {
+                      setMeshColor(preset.color)
+                      localStorage.setItem('cae_mesh_color', preset.color)
+                    }}
+                    className="px-2 py-1 bg-navy-950 border border-navy-850 hover:border-cyan-400 hover:text-cyan-400 text-slate-400 rounded text-[10px] transition-all"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+                <input
+                  type="color"
+                  value={meshColor}
+                  onChange={(e) => {
+                    setMeshColor(e.target.value)
+                    localStorage.setItem('cae_mesh_color', e.target.value)
+                  }}
+                  className="w-6 h-6 p-0 rounded-full border border-navy-800 bg-transparent cursor-pointer"
+                />
+              </div>
+            </div>
+
+            {/* Viewport BG customizer */}
+            <div>
+              <label className="block text-[10px] text-slate-400 font-medium mb-1">Viewport Background</label>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                  { label: 'Black', color: '#020617' },
+                  { label: 'Navy', color: '#0b1329' },
+                  { label: 'Lab', color: '#f8fafc' }
+                ].map((preset) => (
+                  <button
+                    key={preset.label}
+                    onClick={() => {
+                      setViewportBg(preset.color)
+                      localStorage.setItem('cae_viewport_bg', preset.color)
+                    }}
+                    className="px-2 py-1 bg-navy-950 border border-navy-850 hover:border-cyan-400 hover:text-cyan-400 text-slate-400 rounded text-[10px] transition-all"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+                <input
+                  type="color"
+                  value={viewportBg}
+                  onChange={(e) => {
+                    setViewportBg(e.target.value)
+                    localStorage.setItem('cae_viewport_bg', e.target.value)
+                  }}
+                  className="w-6 h-6 p-0 rounded-full border border-navy-800 bg-transparent cursor-pointer"
+                />
+              </div>
+            </div>
+
           </section>
 
           {/* Project History */}
@@ -1191,9 +1645,16 @@ export default function Dashboard() {
                   <div className="h-[200px] bg-navy-950/60 rounded-card border border-navy-800 relative overflow-hidden flex items-center justify-center">
                     <Suspense fallback={<div className="text-slate-400 text-xs">Loading WebGL Canvas...</div>}>
                       <Canvas camera={{ position: [0, 0, 4.5] }}>
+                        <color attach="background" args={[viewportBg]} />
                         <ambientLight intensity={0.4} />
                         <pointLight position={[10, 10, 10]} />
-                        <WireframeMesh rotate={true} projectId={activeProject?.id} />
+                        <WireframeMesh
+                          rotate={true}
+                          projectId={activeProject?.id}
+                          reloadTrigger={meshReloadTrigger}
+                          shadingMode={shadingMode}
+                          meshColor={meshColor}
+                        />
                         <OrbitControls enableZoom={true} enablePan={false} />
                       </Canvas>
                     </Suspense>
@@ -1713,48 +2174,12 @@ export default function Dashboard() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 
-                {/* Parameters configure */}
-                <div className="space-y-4">
-                  <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Boundary Conditions</h4>
-                  
-                  <div className="space-y-3">
+                {/* Left Column: Materials & Boundary Condition Manager */}
+                <div className="space-y-6">
+                  {/* Material selection card */}
+                  <div className="bg-navy-950/40 p-4.5 rounded-card border border-navy-850 space-y-4">
+                    <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider">Select Material</h4>
                     <div>
-                      <label className="block text-[11px] text-slate-400 font-medium mb-1">Fixed Constraint Face ID</label>
-                      <input
-                        type="text"
-                        value={boundaryCondition.fixedFace}
-                        onChange={(e) => setBoundaryCondition({ ...boundaryCondition, fixedFace: e.target.value })}
-                        className="w-full bg-navy-950 border border-navy-800 rounded-btn px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-400 font-medium mb-1">Load Application Face ID</label>
-                      <input
-                        type="text"
-                        value={boundaryCondition.forceFace}
-                        onChange={(e) => setBoundaryCondition({ ...boundaryCondition, forceFace: e.target.value })}
-                        className="w-full bg-navy-950 border border-navy-800 rounded-btn px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-400 font-medium mb-1">Applied Force Magnitude (N)</label>
-                      <input
-                        type="number"
-                        value={boundaryCondition.forceMagnitude}
-                        onChange={(e) => setBoundaryCondition({ ...boundaryCondition, forceMagnitude: e.target.value })}
-                        className="w-full bg-navy-950 border border-navy-800 rounded-btn px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Material Selection list */}
-                <div className="space-y-4">
-                  <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Select Structural Material</h4>
-                  
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block text-[11px] text-slate-400 font-medium mb-1">Material Family</label>
                       <div className="relative">
                         <select
                           value={selectedMaterial?.name || ''}
@@ -1771,9 +2196,8 @@ export default function Dashboard() {
                         <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-2.5 pointer-events-none" />
                       </div>
                     </div>
-
                     {selectedMaterial && (
-                      <div className="bg-navy-950 p-4 rounded-btn border border-navy-850 space-y-2 text-xs">
+                      <div className="bg-navy-950/80 p-3 rounded border border-navy-850 space-y-2 text-xs">
                         <div className="flex justify-between">
                           <span className="text-slate-400">Young's Modulus:</span>
                           <span className="font-semibold text-white font-mono">{selectedMaterial.youngs_modulus} GPa</span>
@@ -1786,14 +2210,302 @@ export default function Dashboard() {
                           <span className="text-slate-400">Density:</span>
                           <span className="font-semibold text-white font-mono">{selectedMaterial.density} kg/m³</span>
                         </div>
-                        {selectedMaterial.yield_strength && (
-                          <div className="flex justify-between">
-                            <span className="text-slate-400">Yield Strength:</span>
-                            <span className="font-semibold text-white font-mono">{selectedMaterial.yield_strength} MPa</span>
-                          </div>
-                        )}
                       </div>
                     )}
+                  </div>
+
+                  {/* BC list manager */}
+                  <div className="bg-navy-950/40 p-4.5 rounded-card border border-navy-850 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider">Boundary Conditions</h4>
+                      <div className="relative">
+                        <select
+                          onChange={(e) => {
+                            if (e.target.value === '') return
+                            const type = e.target.value
+                            let newBc = { type, face_ids: [], description: `${type.toUpperCase()} load` }
+                            if (type === 'force') newBc = { ...newBc, fx: 0, fy: 0, fz: -1000 }
+                            if (type === 'pressure') newBc = { ...newBc, magnitude: 0.1 }
+                            if (type === 'displacement') newBc = { ...newBc, dx: 0, dy: 'free', dz: 'free' }
+                            if (type === 'heat_flux') newBc = { ...newBc, flux: 1000.0 }
+                            if (type === 'convection') newBc = { ...newBc, film_coefficient: 10.0, ambient_temperature: 25.0 }
+                            if (type === 'inlet') newBc = { ...newBc, velocity: 1.0, pressure: 0.0, temperature: 20.0 }
+                            setBoundaryConditions([...boundaryConditions, newBc])
+                            setActiveBcIdx(boundaryConditions.length)
+                            e.target.value = ''
+                          }}
+                          className="bg-cyan-400 hover:bg-cyan-300 text-navy-950 font-bold px-2 py-1.5 rounded text-[11px] focus:outline-none cursor-pointer appearance-none text-center"
+                        >
+                          <option value="">+ Add BC</option>
+                          <option value="fixed">Fixed Support</option>
+                          <option value="force">Force Vector</option>
+                          <option value="pressure">Pressure</option>
+                          <option value="displacement">Prescribed Displacement</option>
+                          <option value="heat_flux">Heat Flux</option>
+                          <option value="convection">Convection</option>
+                          <option value="inlet">CFD Inlet Velocity</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+                      {boundaryConditions.map((bc, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => setActiveBcIdx(idx)}
+                          className={`p-2.5 rounded border text-xs cursor-pointer transition-all flex items-center justify-between ${
+                            activeBcIdx === idx
+                              ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200'
+                              : 'bg-navy-950 border-navy-800 text-slate-300 hover:bg-navy-900'
+                          }`}
+                        >
+                          <div>
+                            <span className="font-bold uppercase text-[10px] bg-navy-800 px-1.5 py-0.5 rounded mr-2 text-cyan-400">{bc.type}</span>
+                            <span>{bc.description || `${bc.type} constraint`}</span>
+                            <span className="block text-[10px] text-slate-500 mt-0.5">Faces: {bc.face_ids.join(', ') || 'none'}</span>
+                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setBoundaryConditions(boundaryConditions.filter((_, i) => i !== idx))
+                              if (activeBcIdx === idx) setActiveBcIdx(null)
+                              else if (activeBcIdx !== null && activeBcIdx > idx) setActiveBcIdx(activeBcIdx - 1)
+                            }}
+                            className="text-slate-500 hover:text-rose-400 p-1"
+                          >
+                            <Trash className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Active BC Config Form */}
+                    {activeBcIdx !== null && boundaryConditions[activeBcIdx] && (() => {
+                      const bc = boundaryConditions[activeBcIdx]
+                      return (
+                        <div className="bg-navy-950 p-4 rounded border border-navy-800 space-y-3 text-xs">
+                          <div className="flex justify-between items-center border-b border-navy-800 pb-2">
+                            <span className="font-bold text-white uppercase text-[11px]">Edit {bc.type} constraint</span>
+                            <span className="text-[10px] text-slate-400">Click model faces to select</span>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-slate-500 mb-1">Description</label>
+                            <input
+                              type="text"
+                              value={bc.description || ''}
+                              onChange={(e) => {
+                                setBoundaryConditions(boundaryConditions.map((b, i) => i === activeBcIdx ? { ...b, description: e.target.value } : b))
+                              }}
+                              className="w-full bg-navy-900 border border-navy-850 rounded px-2 py-1 text-xs text-white"
+                            />
+                          </div>
+                          
+                          <div>
+                            <span className="block text-[10px] text-slate-500 mb-1">Selected Face IDs</span>
+                            <div className="p-2 bg-navy-900 border border-navy-850 rounded text-[11px] font-mono text-cyan-400 max-h-[50px] overflow-y-auto">
+                              {bc.face_ids.length > 0 ? bc.face_ids.join(', ') : 'No faces selected. Click mesh to pick.'}
+                            </div>
+                          </div>
+
+                          {bc.type === 'force' && (
+                            <div className="grid grid-cols-3 gap-2">
+                              <div>
+                                <label className="block text-[9px] text-slate-500">Fx (N)</label>
+                                <input
+                                  type="number"
+                                  value={bc.fx ?? 0}
+                                  onChange={(e) => {
+                                    setBoundaryConditions(boundaryConditions.map((b, i) => i === activeBcIdx ? { ...b, fx: parseFloat(e.target.value) || 0 } : b))
+                                  }}
+                                  className="w-full bg-navy-900 border border-navy-850 rounded px-1.5 py-1 text-xs text-white font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[9px] text-slate-500">Fy (N)</label>
+                                <input
+                                  type="number"
+                                  value={bc.fy ?? 0}
+                                  onChange={(e) => {
+                                    setBoundaryConditions(boundaryConditions.map((b, i) => i === activeBcIdx ? { ...b, fy: parseFloat(e.target.value) || 0 } : b))
+                                  }}
+                                  className="w-full bg-navy-900 border border-navy-850 rounded px-1.5 py-1 text-xs text-white font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[9px] text-slate-500">Fz (N)</label>
+                                <input
+                                  type="number"
+                                  value={bc.fz ?? 0}
+                                  onChange={(e) => {
+                                    setBoundaryConditions(boundaryConditions.map((b, i) => i === activeBcIdx ? { ...b, fz: parseFloat(e.target.value) || 0 } : b))
+                                  }}
+                                  className="w-full bg-navy-900 border border-navy-850 rounded px-1.5 py-1 text-xs text-white font-mono"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {bc.type === 'pressure' && (
+                            <div>
+                              <label className="block text-[10px] text-slate-500 mb-1">Pressure Magnitude (MPa)</label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={bc.magnitude ?? 0}
+                                onChange={(e) => {
+                                  setBoundaryConditions(boundaryConditions.map((b, i) => i === activeBcIdx ? { ...b, magnitude: parseFloat(e.target.value) || 0 } : b))
+                                }}
+                                className="w-full bg-navy-900 border border-navy-850 rounded px-2.5 py-1 text-xs text-white font-mono"
+                              />
+                            </div>
+                          )}
+
+                          {bc.type === 'displacement' && (
+                            <div className="grid grid-cols-3 gap-2">
+                              {['dx', 'dy', 'dz'].map((dir) => {
+                                const val = bc[dir]
+                                const isFree = val === 'free'
+                                return (
+                                  <div key={dir} className="space-y-1">
+                                    <span className="block text-[9px] text-slate-500 uppercase">{dir}</span>
+                                    <div className="flex items-center gap-1.5">
+                                      <input
+                                        type="checkbox"
+                                        checked={!isFree}
+                                        onChange={(e) => {
+                                          const nextVal = e.target.checked ? 0.0 : 'free'
+                                          setBoundaryConditions(boundaryConditions.map((b, i) => i === activeBcIdx ? { ...b, [dir]: nextVal } : b))
+                                        }}
+                                        className="rounded border-navy-700 bg-navy-950 text-cyan-550 focus:ring-cyan-500"
+                                      />
+                                      <span className="text-[9px] text-slate-400">Fixed</span>
+                                    </div>
+                                    {!isFree && (
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        value={typeof val === 'number' ? val : 0}
+                                        onChange={(e) => {
+                                          setBoundaryConditions(boundaryConditions.map((b, i) => i === activeBcIdx ? { ...b, [dir]: parseFloat(e.target.value) || 0 } : b))
+                                        }}
+                                        className="w-full bg-navy-900 border border-navy-850 rounded px-1.5 py-0.5 text-[10px] text-white font-mono"
+                                      />
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+
+                          {bc.type === 'heat_flux' && (
+                            <div>
+                              <label className="block text-[10px] text-slate-500 mb-1">Heat Flux Intensity (W/m²)</label>
+                              <input
+                                type="number"
+                                value={bc.flux ?? 0}
+                                onChange={(e) => {
+                                  setBoundaryConditions(boundaryConditions.map((b, i) => i === activeBcIdx ? { ...b, flux: parseFloat(e.target.value) || 0 } : b))
+                                }}
+                                className="w-full bg-navy-900 border border-navy-850 rounded px-2.5 py-1 text-xs text-white font-mono"
+                              />
+                            </div>
+                          )}
+
+                          {bc.type === 'convection' && (
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-[9px] text-slate-500">Film Coeff (W/m²K)</label>
+                                <input
+                                  type="number"
+                                  value={bc.film_coefficient ?? 0}
+                                  onChange={(e) => {
+                                    setBoundaryConditions(boundaryConditions.map((b, i) => i === activeBcIdx ? { ...b, film_coefficient: parseFloat(e.target.value) || 0 } : b))
+                                  }}
+                                  className="w-full bg-navy-900 border border-navy-850 rounded px-1.5 py-1 text-xs text-white font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[9px] text-slate-500">Ambient Temp (°C)</label>
+                                <input
+                                  type="number"
+                                  value={bc.ambient_temperature ?? 0}
+                                  onChange={(e) => {
+                                    setBoundaryConditions(boundaryConditions.map((b, i) => i === activeBcIdx ? { ...b, ambient_temperature: parseFloat(e.target.value) || 0 } : b))
+                                  }}
+                                  className="w-full bg-navy-900 border border-navy-850 rounded px-1.5 py-1 text-xs text-white font-mono"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {bc.type === 'inlet' && (
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-[9px] text-slate-500">Inlet Velocity (m/s)</label>
+                                <input
+                                  type="number"
+                                  value={bc.velocity ?? 0}
+                                  onChange={(e) => {
+                                    setBoundaryConditions(boundaryConditions.map((b, i) => i === activeBcIdx ? { ...b, velocity: parseFloat(e.target.value) || 0 } : b))
+                                  }}
+                                  className="w-full bg-navy-900 border border-navy-850 rounded px-1.5 py-1 text-xs text-white font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[9px] text-slate-500">Inlet Temp (°C)</label>
+                                <input
+                                  type="number"
+                                  value={bc.temperature ?? 0}
+                                  onChange={(e) => {
+                                    setBoundaryConditions(boundaryConditions.map((b, i) => i === activeBcIdx ? { ...b, temperature: parseFloat(e.target.value) || 0 } : b))
+                                  }}
+                                  className="w-full bg-navy-900 border border-navy-850 rounded px-1.5 py-1 text-xs text-white font-mono"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                        </div>
+                      )
+                    })()}
+                  </div>
+                </div>
+
+                {/* Right Column: 3D setup Canvas view */}
+                <div className="space-y-4 flex flex-col h-full justify-between">
+                  <div className="h-[380px] bg-navy-950/60 rounded-card border border-navy-800 relative overflow-hidden flex items-center justify-center">
+                    <Suspense fallback={<div className="text-slate-400 text-xs">Loading WebGL Setup Canvas...</div>}>
+                      <Canvas camera={{ position: [0, 0, 4.5] }}>
+                        <color attach="background" args={[viewportBg]} />
+                        <ambientLight intensity={0.4} />
+                        <pointLight position={[10, 10, 10]} />
+                        <WireframeMesh
+                          rotate={activeBcIdx === null}
+                          projectId={activeProject?.id}
+                          reloadTrigger={meshReloadTrigger}
+                          shadingMode={shadingMode}
+                          meshColor={meshColor}
+                          selectedFaces={activeBcIdx !== null && boundaryConditions[activeBcIdx] ? boundaryConditions[activeBcIdx].face_ids : []}
+                          onFaceClick={(faceId) => {
+                            if (activeBcIdx === null || !boundaryConditions[activeBcIdx]) return
+                            setBoundaryConditions(prev => prev.map((bc, idx) => {
+                              if (idx !== activeBcIdx) return bc
+                              const exists = bc.face_ids.includes(faceId)
+                              const newFaceIds = exists 
+                                ? bc.face_ids.filter((f: number) => f !== faceId)
+                                : [...bc.face_ids, faceId]
+                              return { ...bc, face_ids: newFaceIds }
+                            }))
+                          }}
+                          boundaryConditions={boundaryConditions}
+                        />
+                        <OrbitControls enableZoom={true} />
+                      </Canvas>
+                    </Suspense>
+                  </div>
+                  
+                  <div className="bg-navy-950 p-4 rounded border border-navy-850 text-xs text-slate-400">
+                    <span className="font-bold text-cyan-400">Interactive Setup:</span> Choose a boundary condition from the manager, then click directly on the 3D model faces above to select where it is applied.
                   </div>
                 </div>
 
@@ -1853,6 +2565,16 @@ export default function Dashboard() {
                   >
                     Displacement
                   </button>
+                  {activeResults?.summary?.max_temperature !== undefined && (
+                    <button
+                      onClick={() => setResultsMode('temperature' as any)}
+                      className={`px-3 py-1 text-xs font-semibold rounded ${
+                        resultsMode === ('temperature' as any) ? 'bg-cyan-400 text-navy-950' : 'bg-navy-950 hover:bg-navy-800 text-slate-400'
+                      }`}
+                    >
+                      Temperature
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1860,19 +2582,139 @@ export default function Dashboard() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   
                   {/* 3D WebGL Contour Canvas */}
-                  <div className="lg:col-span-2 h-[350px] bg-navy-950/60 rounded-card border border-navy-800 relative overflow-hidden flex items-center justify-center">
+                  <div id="results-canvas-container" className="lg:col-span-2 h-[350px] bg-navy-950/60 rounded-card border border-navy-800 relative overflow-hidden flex items-center justify-center">
+                    
+                    {/* Mode Shape Selector for Modal Analysis */}
+                    {activeResults?.result_data?.modes && (
+                      <div className="absolute left-4 top-4 bg-navy-900/80 backdrop-blur border border-navy-800 rounded p-2 z-10 flex items-center gap-1.5">
+                        <span className="text-[10px] text-slate-400">Mode:</span>
+                        <select
+                          value={selectedModeIndex}
+                          onChange={(e) => {
+                            setSelectedModeIndex(parseInt(e.target.value))
+                            setCurrentFrameIndex(0)
+                          }}
+                          className="bg-navy-950 border border-navy-800 rounded px-1.5 py-0.5 text-[10px] text-slate-200 focus:outline-none"
+                        >
+                          {(activeResults.result_data.modes as any[]).map((m: any, idx: number) => (
+                            <option key={idx} value={idx}>
+                              Mode {idx + 1} ({m.frequency} Hz)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Playback Controls Panel */}
+                    <div className="absolute right-4 top-4 bg-navy-900/80 backdrop-blur border border-navy-800 rounded p-2 flex items-center gap-3 z-10">
+                      <button
+                        onClick={() => setIsPlaying(!isPlaying)}
+                        className="bg-cyan-400 hover:bg-cyan-300 text-navy-950 p-1.5 rounded-full transition-all active:scale-90"
+                        title={isPlaying ? 'Pause' : 'Play'}
+                      >
+                        {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                      </button>
+                      
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] text-slate-400">Speed:</span>
+                        <select
+                          value={playbackSpeed}
+                          onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
+                          className="bg-navy-950 border border-navy-800 rounded px-1.5 py-0.5 text-[10px] text-slate-200 focus:outline-none"
+                        >
+                          <option value="0.5">0.5x</option>
+                          <option value="1.0">1.0x</option>
+                          <option value="2.0">2.0x</option>
+                        </select>
+                      </div>
+                      
+                      <button
+                        onClick={() => {
+                          const canvas = document.querySelector('#results-canvas-container canvas') as HTMLCanvasElement
+                          if (!canvas) {
+                            store.addToast('error', 'Viewport canvas not found.')
+                            return
+                          }
+                          
+                          store.addToast('info', 'Recording 3D playback video (5 seconds)...')
+                          const stream = canvas.captureStream(30)
+                          const mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' })
+                          const chunks: Blob[] = []
+                          
+                          mediaRecorder.ondataavailable = (e) => {
+                            if (e.data.size > 0) chunks.push(e.data)
+                          }
+                          
+                          mediaRecorder.onstop = () => {
+                            const blob = new Blob(chunks, { type: 'video/webm' })
+                            const url = URL.createObjectURL(blob)
+                            const a = document.createElement('a')
+                            a.href = url
+                            a.download = `cae_simulation_${resultsMode}.webm`
+                            document.body.appendChild(a)
+                            a.click()
+                            document.body.removeChild(a)
+                            URL.revokeObjectURL(url)
+                            store.addToast('success', 'Video exported successfully!')
+                          }
+                          
+                          setIsPlaying(true)
+                          mediaRecorder.start()
+                          setTimeout(() => {
+                            mediaRecorder.stop()
+                          }, 5000)
+                        }}
+                        className="bg-navy-800 hover:bg-navy-750 text-slate-200 border border-navy-750 p-1.5 rounded transition-all flex items-center justify-center gap-1 text-[10px]"
+                        title="Export Video"
+                      >
+                        <Video className="w-3.5 h-3.5" /> Export
+                      </button>
+                    </div>
+
                     {/* Colorbar legend */}
                     <div className="absolute left-4 bottom-4 bg-navy-900/80 backdrop-blur border border-navy-800 rounded p-2.5 text-[10px] space-y-1.5 z-10 flex flex-col items-center">
-                      <span className="font-bold text-white font-mono">Max: {resultsMode === 'stress' ? '198 MPa' : '0.18 mm'}</span>
+                      <span className="font-bold text-white font-mono">
+                        Max: {
+                          resultsMode === 'stress' 
+                            ? `${activeResults?.summary?.max_stress || '198'} MPa`
+                            : resultsMode === 'displacement'
+                              ? `${activeResults?.summary?.max_displacement || '0.18'} mm`
+                              : `${activeResults?.summary?.max_temperature || '100'} °C`
+                        }
+                      </span>
                       <div className="w-4 h-24 bg-gradient-to-t from-blue-600 via-green-500 to-red-600 rounded" />
                       <span className="font-bold text-white font-mono">Min: 0.0</span>
                     </div>
 
+                    {/* Scrubber slider bar */}
+                    <div className="absolute bottom-4 right-4 left-24 bg-navy-900/80 backdrop-blur border border-navy-800 rounded p-2 z-10 flex items-center gap-3">
+                      <span className="text-[10px] text-slate-400 font-mono">Frame</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="9"
+                        value={currentFrameIndex}
+                        onChange={(e) => setCurrentFrameIndex(parseInt(e.target.value))}
+                        className="flex-1 h-1 bg-navy-850 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                      />
+                      <span className="text-[10px] text-cyan-400 font-mono font-bold">{currentFrameIndex}/9</span>
+                    </div>
+
                     <Suspense fallback={<div className="text-slate-400 text-xs">Loading WebGL Contour...</div>}>
                       <Canvas camera={{ position: [0, 0, 4.2] }} gl={{ preserveDrawingBuffer: true }}>
+                        <color attach="background" args={[viewportBg]} />
                         <ambientLight intensity={0.5} />
                         <pointLight position={[10, 10, 10]} />
-                        <ResultsMesh mode={resultsMode} />
+                        <ResultsMesh
+                          projectId={activeProject?.id}
+                          results={activeResults}
+                          mode={resultsMode as any}
+                          isPlaying={isPlaying}
+                          speed={playbackSpeed}
+                          currentFrame={currentFrameIndex}
+                          setCurrentFrame={setCurrentFrameIndex}
+                          selectedModeIndex={selectedModeIndex}
+                        />
                         <OrbitControls enableZoom={true} />
                       </Canvas>
                     </Suspense>

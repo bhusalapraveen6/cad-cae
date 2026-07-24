@@ -52,11 +52,16 @@ async def run_cfd(
                 else:
                     progress_callback(5, "WARNING: OpenFOAM script or environment not found on system path.")
                     progress_callback(10, "Falling back to emulation CFD solver mode...")
-        return await _mock_cfd(parameters, progress_callback, is_external=(analysis_type == "cfd_external"))
+        return await _mock_cfd(parameters, progress_callback, is_external=(analysis_type == "cfd_external"), mesh_file=mesh_file)
     raise NotImplementedError("OpenFOAM CFD requires Docker environment")
 
 
-async def _mock_cfd(params: Dict, cb: Optional[Callable], is_external: bool = False) -> CFDResult:
+async def _mock_cfd(
+    params: Dict,
+    cb: Optional[Callable],
+    is_external: bool = False,
+    mesh_file: Optional[Path] = None,
+) -> CFDResult:
     stages = [
         (10, "Generating OpenFOAM external wind tunnel domain…"),
         (25, "Mesh generation around airfoil/body (snappyHexMesh)…"),
@@ -84,17 +89,47 @@ async def _mock_cfd(params: Dict, cb: Optional[Callable], is_external: bool = Fa
     rho = params.get("fluid_density", 1.225)
     mu = params.get("dynamic_viscosity", 1.81e-5)
 
+    # ── Bounding box coordinates calculation ──
+    xmin, xmax = 0.0, 100.0
+    ymin, ymax = 0.0, 50.0
+    zmin, zmax = 0.0, 30.0
+    if mesh_file and Path(mesh_file).exists():
+        try:
+            import trimesh
+            mesh = trimesh.load(str(mesh_file), force="mesh")
+            bbox = mesh.bounding_box.bounds
+            xmin, ymin, zmin = bbox[0]
+            xmax, ymax, zmax = bbox[1]
+        except Exception:
+            pass
+
+    # Generate 150 flow grid points inside bounding box
+    xs = np.linspace(xmin, xmax, 10)
+    ys = np.linspace(ymin, ymax, 4)
+    zs = np.linspace(zmin, zmax, 4)
+    
+    sample_points = []
+    velocity_vectors = []
+    
+    for x in xs:
+        for y in ys:
+            for z in zs:
+                sample_points.append([float(x), float(y), float(z)])
+                vx = float(v_inlet * (1.0 + 0.3 * np.sin(y / (ymax - ymin + 1e-5) * np.pi)))
+                vy = float(v_inlet * 0.1 * np.cos(x / (xmax - xmin + 1e-5) * np.pi))
+                vz = float(v_inlet * 0.15 * np.sin(x / (xmax - xmin + 1e-5) * np.pi))
+                velocity_vectors.append([vx, vy, vz])
+
     if is_external:
-        # Simulate external flow past a bluff body / airfoil
         cd = 0.82
         cl = 0.15
-        area = 0.05  # m² projected area
+        area = 0.05
         drag_force = 0.5 * rho * v_inlet**2 * cd * area
         lift_force = 0.5 * rho * v_inlet**2 * cl * area
 
         r = CFDResult(
-            max_velocity=round(v_inlet * 1.45, 4),  # speedup over body
-            max_pressure=round(0.5 * rho * v_inlet**2, 2),  # stagnation pressure
+            max_velocity=round(v_inlet * 1.45, 4),
+            max_pressure=round(0.5 * rho * v_inlet**2, 2),
             pressure_drop=0.0,
         )
         r.result_data = {
@@ -103,18 +138,27 @@ async def _mock_cfd(params: Dict, cb: Optional[Callable], is_external: bool = Fa
             "lift_coefficient": cl,
             "drag_force_n": round(drag_force, 4),
             "lift_force_n": round(lift_force, 4),
+            "cfd_data": {
+                "sample_points": sample_points,
+                "velocity_vectors": velocity_vectors
+            }
         }
         return r
     else:
-        # Hagen-Poiseuille for circular pipe estimate
-        D = 0.02; L = 0.1
+        D = 0.02; L_pipe = 0.1
         Re = rho * v_inlet * D / mu
-        dP = 128 * mu * v_inlet * L / (3.14159 * D**4) if Re < 2300 else 0.5 * rho * v_inlet**2 * 0.02 * L / D
+        dP = 128 * mu * v_inlet * L_pipe / (3.14159 * D**4) if Re < 2300 else 0.5 * rho * v_inlet**2 * 0.02 * L_pipe / D
 
         r = CFDResult(
             max_velocity=round(v_inlet * 2.0, 4),
             max_pressure=round(dP, 2),
             pressure_drop=round(dP, 2),
         )
-        r.result_data = r.to_dict()
+        r.result_data = {
+            **r.to_dict(),
+            "cfd_data": {
+                "sample_points": sample_points,
+                "velocity_vectors": velocity_vectors
+            }
+        }
         return r

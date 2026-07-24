@@ -42,7 +42,7 @@ async def run_thermal(
         if not settings.mock_solver_mode:
             await _report_thermal(progress_callback, 5, "WARNING: CalculiX binary 'ccx' not found on system path.")
             await _report_thermal(progress_callback, 10, "Falling back to emulation solver mode...")
-        return await _mock_thermal(parameters, progress_callback)
+        return await _mock_thermal(parameters, progress_callback, mesh_file)
 
     if not mesh_file:
         raise ValueError("Mesh file required for physical thermal analysis")
@@ -200,7 +200,11 @@ async def _report_thermal(callback: Optional[Callable], pct: int, msg: str) -> N
             callback(pct, msg)
 
 
-async def _mock_thermal(params: Dict, cb: Optional[Callable]) -> ThermalResult:
+async def _mock_thermal(
+    params: Dict,
+    cb: Optional[Callable],
+    mesh_file: Optional[Path] = None,
+) -> ThermalResult:
     steady = params.get("steady_state", True)
 
     stages = [
@@ -241,16 +245,60 @@ async def _mock_thermal(params: Dict, cb: Optional[Callable]) -> ThermalResult:
         max_temp = round(init_temp + (max_temp - init_temp) * 0.78, 2)
         min_temp_surface = round(init_temp + (min_temp_surface - init_temp) * 0.78, 2)
 
-    n = 80
-    x = np.linspace(0, 1, n)
-    temp_field = (max_temp - ambient) * np.exp(-3 * x) + ambient
-    # Ensure min is at least ambient
-    min_temp_field = max(float(temp_field.min()), ambient)
+    # ── Vertex-level thermal calculations over N frames ──
+    vertex_count = 500
+    vertices = None
+    if mesh_file and Path(mesh_file).exists():
+        try:
+            import trimesh
+            mesh = trimesh.load(str(mesh_file), force="mesh")
+            vertices = mesh.vertices
+            vertex_count = len(vertices)
+        except Exception:
+            pass
+
+    if vertices is None:
+        xs = np.linspace(0, 100, vertex_count)
+        vertices = np.column_stack([xs, np.zeros(vertex_count), np.zeros(vertex_count)])
+
+    xmin = float(vertices[:, 0].min())
+    xmax = float(vertices[:, 0].max())
+    L = max(xmax - xmin, 0.001)
+
+    frames = []
+    num_frames = 10
+    
+    for t_idx in range(num_frames):
+        t = t_idx / (num_frames - 1)
+        
+        f_temps = []
+        for v in vertices:
+            x_val = v[0]
+            factor = (x_val - xmin) / L
+            temp_rise = delta_T * np.exp(-3 * factor)
+            
+            if not steady:
+                temp_rise = temp_rise * (1.0 - np.exp(-3 * (t + 0.1)))
+            else:
+                temp_rise = temp_rise * t
+                
+            temp = ambient + temp_rise
+            f_temps.append(float(temp))
+            
+        frames.append({
+            "frame_index": t_idx,
+            "time": t,
+            "displacement": np.zeros((vertex_count, 3)).tolist(),
+            "temperature": f_temps
+        })
 
     r = ThermalResult(
-        max_temperature=round(float(temp_field.max()), 2),
-        min_temperature=round(min_temp_field, 2),
-        temperature_field=temp_field.astype(np.float32),
+        max_temperature=round(float(np.max(frames[-1]["temperature"])), 2),
+        min_temperature=round(float(np.min(frames[-1]["temperature"])), 2),
+        temperature_field=np.array(frames[-1]["temperature"], dtype=np.float32),
     )
-    r.result_data = r.to_dict()
+    r.result_data = {
+        **r.to_dict(),
+        "frames": frames
+    }
     return r

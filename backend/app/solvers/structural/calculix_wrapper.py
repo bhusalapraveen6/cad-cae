@@ -85,7 +85,7 @@ async def run_static_structural(
         if not settings.mock_solver_mode:
             await _report(progress_callback, 5, "WARNING: CalculiX binary 'ccx' not found on system path.")
             await _report(progress_callback, 10, "Falling back to emulation solver mode...")
-        return await _mock_static_result(parameters, progress_callback)
+        return await _mock_static_result(parameters, progress_callback, mesh_file)
 
     workspace = settings.solver_workspace / job_id
     workspace.mkdir(parents=True, exist_ok=True)
@@ -116,7 +116,7 @@ async def run_modal(
         if not settings.mock_solver_mode:
             await _report(progress_callback, 5, "WARNING: CalculiX binary 'ccx' not found on system path.")
             await _report(progress_callback, 10, "Falling back to emulation solver mode...")
-        return await _mock_modal_result(parameters, progress_callback)
+        return await _mock_modal_result(parameters, progress_callback, mesh_file)
 
     workspace = settings.solver_workspace / job_id
     workspace.mkdir(parents=True, exist_ok=True)
@@ -501,6 +501,7 @@ def _parse_buckling_frd(frd_file: Path, params: Dict[str, Any]) -> BucklingResul
 async def _mock_static_result(
     params: Dict[str, Any],
     progress_callback: Optional[Callable],
+    mesh_file: Optional[Path] = None,
 ) -> StructuralResult:
     """Generate physically plausible mock static/nonlinear results for demo/dev mode."""
     import asyncio
@@ -549,11 +550,11 @@ async def _mock_static_result(
 
     E_gpa = mat.get("youngs_modulus", 210.0)
     # Simple cantilever: δ = FL³/(3EI), σ = M*c/I
-    L = 100e-3; b = 10e-3; h = 10e-3  # m
+    L_beam = 100e-3; b = 10e-3; h = 10e-3  # m
     I = b * h**3 / 12
     F = total_force
-    max_disp = F * L**3 / (3 * E_gpa * 1e9 * I) * 1000  # mm
-    max_stress = F * L * (h / 2) / I / 1e6  # MPa
+    max_disp = F * L_beam**3 / (3 * E_gpa * 1e9 * I) * 1000  # mm
+    max_stress = F * L_beam * (h / 2) / I / 1e6  # MPa
 
     # Scale results slightly depending on mesh size (discretization error)
     max_disp = max_disp * (1.0 - 0.05 * (mesh_size / 5.0))
@@ -571,24 +572,72 @@ async def _mock_static_result(
     result.max_displacement = round(max_disp + random.uniform(-0.01, 0.01), 4)
     result.min_safety_factor = round(yield_str / max(result.max_stress, 1.0), 2)
 
-    # Generate node count based on mesh size (smaller mesh size -> higher node count)
-    n = int(max(10, min(250 / mesh_size, 500)))
-    xs = np.linspace(0, 100, n)
-    result.node_coords = np.column_stack([xs, np.zeros(n), np.zeros(n)]).astype(np.float32)
+    # ── Vertex-level displacement and stress calculations ──
+    vertex_count = 500
+    vertices = None
+    if mesh_file and Path(mesh_file).exists():
+        try:
+            import trimesh
+            mesh = trimesh.load(str(mesh_file), force="mesh")
+            vertices = mesh.vertices
+            vertex_count = len(vertices)
+        except Exception:
+            pass
+
+    if vertices is None:
+        xs = np.linspace(0, 100, vertex_count)
+        vertices = np.column_stack([xs, np.zeros(vertex_count), np.zeros(vertex_count)])
+
+    xmin = float(vertices[:, 0].min())
+    xmax = float(vertices[:, 0].max())
+    L = max(xmax - xmin, 0.001)
+
+    result.node_coords = vertices.astype(np.float32)
     
-    # Displacement field
+    # Displacement field for final frame
+    disp_z = (vertices[:, 0] - xmin) / L
+    disp_z = np.clip(disp_z, 0, 1) ** 2 * result.max_displacement
     result.displacement_field = np.column_stack([
-        np.zeros(n), np.zeros(n),
-        np.linspace(0, result.max_displacement, n)
+        np.zeros(vertex_count), np.zeros(vertex_count), disp_z
     ]).astype(np.float32)
-    result.von_mises_field = np.linspace(result.min_stress, result.max_stress, n).astype(np.float32)
-    result.result_data = result.to_dict()
+    
+    # Stress field for final frame
+    stress_f = (1.0 - (vertices[:, 0] - xmin) / L)
+    result.von_mises_field = (np.clip(stress_f, 0.05, 1.0) * result.max_stress).astype(np.float32)
+    
+    # Generate 10 frames from t = 0 to 1
+    frames = []
+    num_frames = 10
+    for t_idx in range(num_frames):
+        t = t_idx / (num_frames - 1)
+        disp_scale = t
+        stress_scale = t
+        
+        f_disp_z = (vertices[:, 0] - xmin) / L
+        f_disp_z = np.clip(f_disp_z, 0, 1) ** 2 * (result.max_displacement * disp_scale)
+        f_disp = np.column_stack([np.zeros(vertex_count), np.zeros(vertex_count), f_disp_z]).astype(np.float32)
+        
+        f_stress = (1.0 - (vertices[:, 0] - xmin) / L)
+        f_stress = np.clip(f_stress, 0.05, 1.0) * (result.max_stress * stress_scale)
+        
+        frames.append({
+            "frame_index": t_idx,
+            "time": t,
+            "displacement": f_disp.tolist(),
+            "stress": f_stress.tolist()
+        })
+        
+    result.result_data = {
+        **result.to_dict(),
+        "frames": frames
+    }
     return result
 
 
 async def _mock_modal_result(
     params: Dict[str, Any],
     progress_callback: Optional[Callable],
+    mesh_file: Optional[Path] = None,
 ) -> ModalResult:
     import asyncio
 
@@ -608,17 +657,65 @@ async def _mock_modal_result(
     n     = params.get("num_modes", 10)
 
     # Euler-Bernoulli beam frequencies (approximate)
-    L = 0.1; b = 0.01; h = 0.01
+    L_beam = 0.1; b = 0.01; h = 0.01
     beta_n = [1.8751, 4.6941, 7.8548, 10.996, 14.137, 17.279, 20.420, 23.562, 26.704, 29.845]
     E = E_gpa * 1e9; A = b * h; I = b * h**3 / 12
     freqs = []
     for i in range(min(n, len(beta_n))):
-        f = (beta_n[i]**2 / (2 * math.pi)) * math.sqrt(E * I / (rho * A * L**4))
+        f = (beta_n[i]**2 / (2 * math.pi)) * math.sqrt(E * I / (rho * A * L_beam**4))
         freqs.append(round(f, 2))
+
+    # ── Vertex-level mode shape calculations ──
+    vertex_count = 500
+    vertices = None
+    if mesh_file and Path(mesh_file).exists():
+        try:
+            import trimesh
+            mesh = trimesh.load(str(mesh_file), force="mesh")
+            vertices = mesh.vertices
+            vertex_count = len(vertices)
+        except Exception:
+            pass
+
+    if vertices is None:
+        xs = np.linspace(0, 100, vertex_count)
+        vertices = np.column_stack([xs, np.zeros(vertex_count), np.zeros(vertex_count)])
+
+    xmin = float(vertices[:, 0].min())
+    xmax = float(vertices[:, 0].max())
+    L = max(xmax - xmin, 0.001)
+
+    modes_data = []
+    for mode_idx in range(min(n, 5)):
+        mode_freq = freqs[mode_idx] if mode_idx < len(freqs) else 100.0 * (mode_idx + 1)
+        mode_frames = []
+        for f_idx in range(12):
+            phase = (f_idx / 12) * 2 * np.pi
+            wavelength_factor = mode_idx + 1
+            disp_z = np.sin(wavelength_factor * np.pi * (vertices[:, 0] - xmin) / L)
+            disp_z = disp_z * np.sin(phase) * 1.5  # amplitude
+            
+            f_disp = np.column_stack([np.zeros(vertex_count), np.zeros(vertex_count), disp_z]).astype(np.float32)
+            f_stress = np.abs(disp_z) * 40.0
+            
+            mode_frames.append({
+                "frame_index": f_idx,
+                "phase": phase,
+                "displacement": f_disp.tolist(),
+                "stress": f_stress.tolist()
+            })
+        modes_data.append({
+            "mode_index": mode_idx,
+            "frequency": mode_freq,
+            "frames": mode_frames
+        })
 
     result = ModalResult()
     result.frequencies = freqs[:n]
-    result.result_data = result.to_dict()
+    result.result_data = {
+        **result.to_dict(),
+        "modes": modes_data
+    }
     return result
 
 

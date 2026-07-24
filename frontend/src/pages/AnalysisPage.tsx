@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useStore } from '@/store'
-import { getMaterials, createMaterial, createJob, getProject, getSuggestions, type AnalysisType, type Material } from '@/api/client'
+import { getMaterials, createMaterial, createJob, getProject, getSuggestions, getGeometry, type AnalysisType, type Material, type GeometryFeatures } from '@/api/client'
 
 const CATEGORY_ICONS: Record<string, string> = {
   structural: '⚡', thermal: '🔥', cfd: '💨', fatigue: '⚠',
@@ -43,6 +43,8 @@ export default function AnalysisPage() {
   const [materials, setMaterials] = useState<Material[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [activeType, setActiveType] = useState<AnalysisType | null>(null)
+  const [geometry, setGeometry] = useState<GeometryFeatures | null>(null)
+  const [loadingGeometry, setLoadingGeometry] = useState(true)
 
   const [showCustomMaterialModal, setShowCustomMaterialModal] = useState(false)
   const [customMatName, setCustomMatName] = useState('')
@@ -104,6 +106,12 @@ export default function AnalysisPage() {
         getProject(projectId).then(setCurrentProject).catch(console.error)
       }
       getSuggestions(projectId).then(data => setSuggestions(data.suggestions)).catch(console.error)
+      
+      setLoadingGeometry(true)
+      getGeometry(projectId)
+        .then(setGeometry)
+        .catch(console.error)
+        .finally(() => setLoadingGeometry(false))
     }
   }, [projectId])
 
@@ -199,6 +207,25 @@ export default function AnalysisPage() {
     acc[cat].push(s)
     return acc
   }, {})
+
+  const parsingFailed = !loadingGeometry && (!geometry || !geometry.volume || geometry.volume === 0)
+
+  if (parsingFailed) {
+    return (
+      <div className="page-content">
+        <div style={{ paddingTop: 'var(--space-xl)', maxWidth: 600, margin: '0 auto', textAlign: 'center' }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
+          <h2 style={{ color: 'var(--accent-red)', marginBottom: 'var(--space-md)' }}>Geometry Analysis Failed</h2>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-lg)', lineHeight: 1.6 }}>
+            This project does not have valid geometry data (either because the CAD file is corrupted, parsing failed, or the file format is unsupported).
+          </p>
+          <button className="btn btn-primary btn-lg" onClick={() => navigate('/upload')}>
+            Go to Upload Page
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="page-content">

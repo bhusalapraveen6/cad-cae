@@ -50,7 +50,7 @@ async def parse_cad_file(file_path: Path, deflection: float = 5.0) -> GeometryDa
                 import cascadio
                 return await _parse_step_cascadio(file_path, suffix, deflection)
             except Exception as e:
-                logger.warning("cascadio parsing failed or not available, falling back to other methods", error=str(e))
+                logger.warning("cascadio parsing failed or not available, falling back to other methods", error=str(e), exc_info=True)
 
         if settings.mock_cad_mode:
             logger.warning("Mock CAD mode: STEP/IGES parsed as synthetic geometry")
@@ -127,7 +127,7 @@ async def _parse_step_cascadio(file_path: Path, suffix: str, deflection: float =
             format=suffix.lstrip("."),
         )
     except Exception as e:
-        logger.error("cascadio parsing failed", error=str(e))
+        logger.error("cascadio parsing failed", error=str(e), exc_info=True)
         raise e
 
 
@@ -262,18 +262,23 @@ def _extract_occ_mesh(shape) -> Tuple[np.ndarray, np.ndarray]:
 
 def _synthetic_geometry(suffix: str, element_size: float = 5.0, file_path: Optional[Path] = None) -> GeometryData:
     """
-    Return synthetic bracket-like geometry for mock/demo mode.
-    Used when pythonocc-core is not available (Windows native dev).
-    Subdivides the outer shell to simulate dynamic mesh density based on element size.
+    Fallback geometry processor for mock/demo mode.
+    Attempts coordinates regex parsing for STEP files.
+    Raises ValueError instead of returning a fake box if parsing cannot be done.
     """
-    if file_path and file_path.exists() and suffix in (".step", ".stp"):
+    if suffix in (".step", ".stp"):
+        if not file_path or not file_path.exists():
+            raise ValueError(f"STEP file not found at path: {file_path}")
+        
         try:
             import re
             from scipy.spatial import ConvexHull
             
             content = file_path.read_text(errors='ignore')
             pts = []
-            for match in re.finditer(r"CARTESIAN_POINT\s*\(\s*(?:'[^']*'|.*?)\s*,\s*\(\s*([^)]+)\s*\)\s*\)", content, re.IGNORECASE):
+            # Robust regex pattern matching CARTESIAN_POINT with optional name in single quotes
+            pattern = r"CARTESIAN_POINT\s*\(\s*(?:(?:'[^']*'|[^,]*)\s*,\s*)?\(\s*([^)]+)\s*\)\s*\)"
+            for match in re.finditer(pattern, content, re.IGNORECASE):
                 coord_str = match.group(1)
                 parts = coord_str.split(',')
                 if len(parts) == 3:
@@ -285,103 +290,59 @@ def _synthetic_geometry(suffix: str, element_size: float = 5.0, file_path: Optio
                     except ValueError:
                         continue
             
-            if pts:
-                vertices = np.array(pts, dtype=np.float32)
-                xmin, ymin, zmin = vertices.min(axis=0)
-                xmax, ymax, zmax = vertices.max(axis=0)
-                dx, dy, dz = float(xmax - xmin), float(ymax - ymin), float(zmax - zmin)
+            if not pts:
+                raise ValueError("No CARTESIAN_POINT definitions found in STEP file.")
                 
-                dx = float(max(dx, 0.001))
-                dy = float(max(dy, 0.001))
-                dz = float(max(dz, 0.001))
-                
-                center_of_mass = (float((xmin + xmax) / 2), float((ymin + ymax) / 2), float((zmin + zmax) / 2))
-                
-                faces = []
-                if len(vertices) >= 4:
-                    try:
-                        hull = ConvexHull(vertices)
-                        faces = hull.simplices.astype(np.int32)
-                        volume = float(hull.volume)
-                        surface_area = float(hull.area)
-                    except Exception:
-                        faces = np.zeros((0, 3), dtype=np.int32)
-                        volume = float(dx * dy * dz)
-                        surface_area = float(2 * (dx * dy + dy * dz + dz * dx))
-                else:
+            vertices = np.array(pts, dtype=np.float32)
+            xmin, ymin, zmin = vertices.min(axis=0)
+            xmax, ymax, zmax = vertices.max(axis=0)
+            dx, dy, dz = float(xmax - xmin), float(ymax - ymin), float(zmax - zmin)
+            
+            dx = float(max(dx, 0.001))
+            dy = float(max(dy, 0.001))
+            dz = float(max(dz, 0.001))
+            
+            center_of_mass = (float((xmin + xmax) / 2), float((ymin + ymax) / 2), float((zmin + zmax) / 2))
+            
+            faces = []
+            if len(vertices) >= 4:
+                try:
+                    hull = ConvexHull(vertices)
+                    faces = hull.simplices.astype(np.int32)
+                    volume = float(hull.volume)
+                    surface_area = float(hull.area)
+                except Exception as ex:
+                    logger.warning("ConvexHull failed for fallback STEP points, using bounding box", error=str(ex))
                     faces = np.zeros((0, 3), dtype=np.int32)
                     volume = float(dx * dy * dz)
                     surface_area = float(2 * (dx * dy + dy * dz + dz * dx))
-                
-                logger.info(
-                    "Parsed STEP file coordinates using local ConvexHull fallback",
-                    num_vertices=len(vertices),
-                    num_faces=len(faces),
-                    bbox=(dx, dy, dz)
-                )
-                
-                return GeometryData(
-                    volume=volume,
-                    surface_area=surface_area,
-                    bbox=(dx, dy, dz),
-                    center_of_mass=center_of_mass,
-                    vertices=vertices,
-                    faces=faces,
-                    is_watertight=True,
-                    num_components=1,
-                    format=suffix.lstrip("."),
-                )
+            else:
+                faces = np.zeros((0, 3), dtype=np.int32)
+                volume = float(dx * dy * dz)
+                surface_area = float(2 * (dx * dy + dy * dz + dz * dx))
+            
+            logger.info(
+                "Parsed STEP file coordinates using local ConvexHull fallback",
+                num_vertices=len(vertices),
+                num_faces=len(faces),
+                bbox=(dx, dy, dz)
+            )
+            
+            return GeometryData(
+                volume=volume,
+                surface_area=surface_area,
+                bbox=(dx, dy, dz),
+                center_of_mass=center_of_mass,
+                vertices=vertices,
+                faces=faces,
+                is_watertight=True,
+                num_components=1,
+                format=suffix.lstrip("."),
+            )
         except Exception as e:
-            logger.error("Failed fallback step parsing, falling back to synthetic box", error=str(e))
-    # Simulate a steel bracket: ~100×50×30 mm
-    volume = 100.0 * 50.0 * 30.0 * 0.6   # subtract material for hollow regions
-    surface_area = 2 * (100 * 50 + 100 * 30 + 50 * 30) * 1.2
-
-    # Generate a subdivided box
-    element_size = max(0.5, min(element_size, 50.0))
-    dx, dy, dz = 100.0, 50.0, 30.0
-    nx = max(2, int(round(dx / element_size)))
-    ny = max(2, int(round(dy / element_size)))
-    nz = max(2, int(round(dz / element_size)))
-
-    vertices = []
-    faces = []
-    
-    def add_face(origin, u_dir, v_dir, u_div, v_div):
-        start_idx = len(vertices)
-        for i in range(u_div + 1):
-            for j in range(v_div + 1):
-                pt = origin + (i / u_div) * u_dir + (j / v_div) * v_dir
-                vertices.append(pt)
-        for i in range(u_div):
-            for j in range(v_div):
-                n0 = start_idx + i * (v_div + 1) + j
-                n1 = n0 + 1
-                n2 = start_idx + (i + 1) * (v_div + 1) + j
-                n3 = n2 + 1
-                faces.append([n0, n2, n1])
-                faces.append([n1, n2, n3])
-
-    origin = np.array([0.0, 0.0, 0.0])
-    add_face(origin, np.array([dx, 0, 0]), np.array([0, dy, 0]), nx, ny)
-    add_face(origin + np.array([0, 0, dz]), np.array([0, dy, 0]), np.array([dx, 0, 0]), ny, nx)
-    add_face(origin, np.array([0, dy, 0]), np.array([0, 0, dz]), ny, nz)
-    add_face(origin + np.array([dx, 0, 0]), np.array([0, 0, dz]), np.array([0, dy, 0]), nz, ny)
-    add_face(origin, np.array([0, 0, dz]), np.array([dx, 0, 0]), nz, nx)
-    add_face(origin + np.array([0, dy, 0]), np.array([dx, 0, 0]), np.array([0, 0, dz]), nx, nz)
-
-    verts = np.array(vertices, dtype=np.float32)
-    faces = np.array(faces, dtype=np.int32)
-
-    return GeometryData(
-        volume=volume,
-        surface_area=surface_area,
-        bbox=(100.0, 50.0, 30.0),
-        center_of_mass=(50.0, 25.0, 15.0),
-        vertices=verts,
-        faces=faces,
-        is_watertight=True,
-        num_components=1,
-        format=suffix.lstrip("."),
-    )
+            logger.error("Failed fallback step parsing", error=str(e), exc_info=True)
+            raise ValueError(f"STEP parsing failed: {e}")
+    else:
+        # Reject IGES (.iges / .igs) or other formats when real parsers fail
+        raise ValueError(f"{suffix.upper().lstrip('.')} parsing is not supported in local fallback mode (requires OpenCASCADE / pythonocc-core).")
 

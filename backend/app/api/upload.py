@@ -54,13 +54,20 @@ async def upload_cad_file(
     from app.geometry_analysis.feature_extractor import extract_features
     from app.geometry_analysis.suggestion_engine import suggest_analyses
 
+    geom_data = None
+    features = None
+    suggestions = []
+    parsing_status = "success"
+    error_message = None
+
     try:
         geom_data = await parse_cad_file(saved_path)
         features  = extract_features(geom_data)
         suggestions  = suggest_analyses(features, None)
     except Exception as e:
-        logger.error("Geometry analysis failed", error=str(e))
-        raise HTTPException(status_code=500, detail=f"Geometry analysis failed: {e}")
+        logger.error("Geometry analysis/parsing failed", error=str(e), exc_info=True)
+        parsing_status = "failed"
+        error_message = str(e)
 
     # ── Persist to database ───────────────────────────────────────────────────
     name = project_name or Path(file.filename).stem
@@ -75,24 +82,24 @@ async def upload_cad_file(
     )
     db.add(project)
 
-    com = features.center_of_mass
+    com = features.center_of_mass if features else (0.0, 0.0, 0.0)
     geo_db = GeometryFeatures(
         project_id=project_id,
-        volume=features.volume,
-        surface_area=features.surface_area,
-        bbox_x=features.bbox[0],
-        bbox_y=features.bbox[1],
-        bbox_z=features.bbox[2],
+        volume=features.volume if features else None,
+        surface_area=features.surface_area if features else None,
+        bbox_x=features.bbox[0] if features else None,
+        bbox_y=features.bbox[1] if features else None,
+        bbox_z=features.bbox[2] if features else None,
         center_of_mass=f"{com[0]:.2f},{com[1]:.2f},{com[2]:.2f}",
-        slenderness_ratio=features.slenderness_ratio,
-        surface_volume_ratio=features.surface_volume_ratio,
-        is_thin_walled=features.is_thin_walled,
-        has_holes=features.has_holes,
-        has_fillets=features.has_fillets,
-        has_internal_cavity=features.has_internal_cavity,
-        has_symmetry=features.has_symmetry,
-        is_sheet_metal=features.is_sheet_metal,
-        raw_features=features.raw,
+        slenderness_ratio=features.slenderness_ratio if features else None,
+        surface_volume_ratio=features.surface_volume_ratio if features else None,
+        is_thin_walled=features.is_thin_walled if features else False,
+        has_holes=features.has_holes if features else False,
+        has_fillets=features.has_fillets if features else False,
+        has_internal_cavity=features.has_internal_cavity if features else False,
+        has_symmetry=features.has_symmetry if features else False,
+        is_sheet_metal=features.is_sheet_metal if features else False,
+        raw_features=features.raw if features else {},
         suggestions=[
             {
                 "analysis_type": s.analysis_type.value,
@@ -115,26 +122,30 @@ async def upload_cad_file(
     )
     from app.models.db_models import AnalysisType
 
-    geo_response = GeometryFeaturesResponse(
-        volume=features.volume,
-        surface_area=features.surface_area,
-        bounding_box=BoundingBox(x=features.bbox[0], y=features.bbox[1], z=features.bbox[2]),
-        center_of_mass=list(features.center_of_mass),
-        slenderness_ratio=features.slenderness_ratio,
-        surface_volume_ratio=features.surface_volume_ratio,
-        is_thin_walled=features.is_thin_walled,
-        has_holes=features.has_holes,
-        has_fillets=features.has_fillets,
-        has_internal_cavity=features.has_internal_cavity,
-        has_symmetry=features.has_symmetry,
-        is_sheet_metal=features.is_sheet_metal,
-    )
+    geo_response = None
+    if features:
+        geo_response = GeometryFeaturesResponse(
+            volume=features.volume,
+            surface_area=features.surface_area,
+            bounding_box=BoundingBox(x=features.bbox[0], y=features.bbox[1], z=features.bbox[2]),
+            center_of_mass=list(features.center_of_mass),
+            slenderness_ratio=features.slenderness_ratio,
+            surface_volume_ratio=features.surface_volume_ratio,
+            is_thin_walled=features.is_thin_walled,
+            has_holes=features.has_holes,
+            has_fillets=features.has_fillets,
+            has_internal_cavity=features.has_internal_cavity,
+            has_symmetry=features.has_symmetry,
+            is_sheet_metal=features.is_sheet_metal,
+        )
 
     return UploadResponse(
         project_id=project_id,
         filename=file.filename,
         file_format=suffix.lstrip("."),
         file_size=len(file_bytes),
+        parsing_status=parsing_status,
+        error_message=error_message,
         geometry_features=geo_response,
         suggestions=[
             AnalysisSuggestion(

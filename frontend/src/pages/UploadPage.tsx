@@ -31,6 +31,7 @@ export default function UploadPage() {
   const [projectName, setProjectName] = useState('')
   const [geometry, setGeometry] = useState<GeometryFeatures | null>(null)
   const [suggestions, setSuggestionsLocal] = useState<AnalysisSuggestion[]>([])
+  const [parsingError, setParsingError] = useState<string | null>(null)
 
   const onDrop = useCallback((accepted: File[]) => {
     if (accepted[0]) setFile(accepted[0])
@@ -53,11 +54,20 @@ export default function UploadPage() {
     if (!file) return
     setUploading(true)
     setProgress(10)
+    setParsingError(null)
 
     try {
       setProgress(30)
       const result = await uploadCADFile(file, projectName)
       setProgress(80)
+
+      if (result.parsing_status === 'failed') {
+        setParsingError(result.error_message || 'Geometry parsing failed.')
+        setGeometry(null)
+        addToast('error', `✗ Parsing failed: ${result.error_message || 'Unknown parser error'}`)
+        setProgress(100)
+        return
+      }
 
       setUploadResult(result)
       setCurrentProject({
@@ -81,6 +91,7 @@ export default function UploadPage() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Upload failed'
       addToast('error', msg)
+      setParsingError(msg)
     } finally {
       setUploading(false)
     }
@@ -168,6 +179,23 @@ export default function UploadPage() {
         )}
 
         {/* Geometry results */}
+        {parsingError && (
+          <div className="card mb-lg" style={{ borderColor: 'var(--accent-red)', background: 'rgba(255,82,82,0.05)' }}>
+            <div className="flex-between mb-md">
+              <h3 style={{ color: 'var(--accent-red)' }}>✗ Geometry Parsing Failed</h3>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                {file?.name}
+              </span>
+            </div>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 'var(--space-md)' }}>
+              We couldn't analyze the 3D geometry of your file. Details: <code style={{ color: 'var(--accent-red)' }}>{parsingError}</code>
+            </p>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              Please try re-uploading a valid STEP, STL, or OBJ file.
+            </p>
+          </div>
+        )}
+
         {geometry && (
           <>
             <div className="card mb-lg" style={{ borderColor: 'rgba(0,230,118,0.2)' }}>
