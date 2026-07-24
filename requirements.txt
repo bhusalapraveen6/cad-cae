@@ -13,3 +13,4 @@ httpx
 anthropic
 reportlab
 python-docx
+cascadio>=0.0.13

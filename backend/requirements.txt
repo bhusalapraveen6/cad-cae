@@ -27,6 +27,8 @@ numpy-stl==3.1.2
 meshio==5.3.5
 scipy==1.14.1
 shapely==2.0.6             # 2D polygon ops for cross-section analysis
+cascadio>=0.0.13
+
 
 # ── Results / Visualization ───────────────────────────────────
 pyvista==0.44.1            # VTK-based post-processing
