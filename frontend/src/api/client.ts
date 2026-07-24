@@ -425,4 +425,16 @@ export const uploadReportImage = async (
   return data
 }
 
+export interface MeshData {
+  vertices: number[][]
+  faces: number[][]
+  bbox?: number[]
+  center_of_mass?: number[]
+}
+
+export const getMesh = async (projectId: string): Promise<MeshData> => {
+  const { data } = await api.get(`/projects/${projectId}/mesh`)
+  return data
+}
+
 export default api

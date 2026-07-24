@@ -47,7 +47,7 @@ async def parse_cad_file(file_path: Path, deflection: float = 5.0) -> GeometryDa
     elif suffix in (".step", ".stp", ".iges", ".igs"):
         if settings.mock_cad_mode:
             logger.warning("Mock CAD mode: STEP/IGES parsed as synthetic geometry")
-            return _synthetic_geometry(suffix, deflection)
+            return _synthetic_geometry(suffix, deflection, file_path)
         else:
             return await _parse_step_iges(file_path, suffix, deflection)
     else:
@@ -146,7 +146,7 @@ async def _parse_step_iges(file_path: Path, suffix: str, deflection: float = 0.5
         )
     except ImportError:
         logger.error("pythonocc-core not available; falling back to synthetic geometry")
-        return _synthetic_geometry(suffix, deflection)
+        return _synthetic_geometry(suffix, deflection, file_path)
 
 
 def _extract_occ_mesh(shape) -> Tuple[np.ndarray, np.ndarray]:
@@ -182,12 +182,79 @@ def _extract_occ_mesh(shape) -> Tuple[np.ndarray, np.ndarray]:
     return np.concatenate(all_verts), np.concatenate(all_faces)
 
 
-def _synthetic_geometry(suffix: str, element_size: float = 5.0) -> GeometryData:
+def _synthetic_geometry(suffix: str, element_size: float = 5.0, file_path: Optional[Path] = None) -> GeometryData:
     """
     Return synthetic bracket-like geometry for mock/demo mode.
     Used when pythonocc-core is not available (Windows native dev).
     Subdivides the outer shell to simulate dynamic mesh density based on element size.
     """
+    if file_path and file_path.exists() and suffix in (".step", ".stp"):
+        try:
+            import re
+            from scipy.spatial import ConvexHull
+            
+            content = file_path.read_text(errors='ignore')
+            pts = []
+            for match in re.finditer(r"CARTESIAN_POINT\s*\(\s*(?:'[^']*'|.*?)\s*,\s*\(\s*([^)]+)\s*\)\s*\)", content, re.IGNORECASE):
+                coord_str = match.group(1)
+                parts = coord_str.split(',')
+                if len(parts) == 3:
+                    try:
+                        x = float(parts[0].strip())
+                        y = float(parts[1].strip())
+                        z = float(parts[2].strip())
+                        pts.append([x, y, z])
+                    except ValueError:
+                        continue
+            
+            if pts:
+                vertices = np.array(pts, dtype=np.float32)
+                xmin, ymin, zmin = vertices.min(axis=0)
+                xmax, ymax, zmax = vertices.max(axis=0)
+                dx, dy, dz = xmax - xmin, ymax - ymin, zmax - zmin
+                
+                dx = max(dx, 0.001)
+                dy = max(dy, 0.001)
+                dz = max(dz, 0.001)
+                
+                center_of_mass = (float((xmin + xmax) / 2), float((ymin + ymax) / 2), float((zmin + zmax) / 2))
+                
+                faces = []
+                if len(vertices) >= 4:
+                    try:
+                        hull = ConvexHull(vertices)
+                        faces = hull.simplices.astype(np.int32)
+                        volume = float(hull.volume)
+                        surface_area = float(hull.area)
+                    except Exception:
+                        faces = np.zeros((0, 3), dtype=np.int32)
+                        volume = float(dx * dy * dz)
+                        surface_area = float(2 * (dx * dy + dy * dz + dz * dx))
+                else:
+                    faces = np.zeros((0, 3), dtype=np.int32)
+                    volume = float(dx * dy * dz)
+                    surface_area = float(2 * (dx * dy + dy * dz + dz * dx))
+                
+                logger.info(
+                    "Parsed STEP file coordinates using local ConvexHull fallback",
+                    num_vertices=len(vertices),
+                    num_faces=len(faces),
+                    bbox=(dx, dy, dz)
+                )
+                
+                return GeometryData(
+                    volume=volume,
+                    surface_area=surface_area,
+                    bbox=(dx, dy, dz),
+                    center_of_mass=center_of_mass,
+                    vertices=vertices,
+                    faces=faces,
+                    is_watertight=True,
+                    num_components=1,
+                    format=suffix.lstrip("."),
+                )
+        except Exception as e:
+            logger.error("Failed fallback step parsing, falling back to synthetic box", error=str(e))
     # Simulate a steel bracket: ~100×50×30 mm
     volume = 100.0 * 50.0 * 30.0 * 0.6   # subtract material for hollow regions
     surface_area = 2 * (100 * 50 + 100 * 30 + 50 * 30) * 1.2

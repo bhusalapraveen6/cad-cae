@@ -45,6 +45,13 @@ import {
   saveApiKey,
   deleteApiKey,
   refineMesh,
+  getMesh,
+  meshDensity,
+  meshMove,
+  meshSplit,
+  meshReplace,
+  meshSmooth,
+  meshRebuild,
   type Project,
   type GeometryFeatures,
   type AnalysisSuggestion,
@@ -64,8 +71,24 @@ function jetColor(t: number): THREE.Color {
 }
 
 // ── Animated Wireframe Mesh for Preview ──
-function WireframeMesh({ rotate = true }) {
+function WireframeMesh({ rotate = true, projectId }: { rotate?: boolean; projectId?: string }) {
   const meshRef = useRef<THREE.Mesh>(null!)
+  const [meshData, setMeshData] = useState<{ vertices: number[][]; faces: number[][] } | null>(null)
+
+  useEffect(() => {
+    if (!projectId || projectId.startsWith('demo') || projectId.startsWith('proj')) {
+      setMeshData(null)
+      return
+    }
+    getMesh(projectId)
+      .then((data) => {
+        setMeshData(data)
+      })
+      .catch((err) => {
+        console.error('Failed to fetch project mesh:', err)
+        setMeshData(null)
+      })
+  }, [projectId])
 
   useFrame((state) => {
     if (rotate && meshRef.current) {
@@ -74,11 +97,34 @@ function WireframeMesh({ rotate = true }) {
     }
   })
 
-  // Generates a mock complex shape (TorusKnot) to resemble a mechanical CAD model
+  const bufferGeometry = useMemo(() => {
+    if (!meshData || !meshData.vertices.length || !meshData.faces.length) {
+      return null
+    }
+
+    const geometry = new THREE.BufferGeometry()
+    const vertsArray = new Float32Array(meshData.vertices.flat())
+    const facesArray = new Uint32Array(meshData.faces.flat())
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(vertsArray, 3))
+    geometry.setIndex(new THREE.BufferAttribute(facesArray, 1))
+    geometry.computeVertexNormals()
+
+    return geometry
+  }, [meshData])
+
+  if (!bufferGeometry) {
+    return (
+      <mesh ref={meshRef}>
+        <torusKnotGeometry args={[1.6, 0.5, 120, 16, 2, 3]} />
+        <meshBasicMaterial color="#22d3ee" wireframe={true} transparent={true} opacity={0.65} />
+      </mesh>
+    )
+  }
+
   return (
-    <mesh ref={meshRef}>
-      <torusKnotGeometry args={[1.6, 0.5, 120, 16, 2, 3]} />
-      <meshBasicMaterial color="#22d3ee" wireframe={true} transparent={true} opacity={0.65} />
+    <mesh ref={meshRef} geometry={bufferGeometry}>
+      <meshStandardMaterial color="#22d3ee" wireframe={true} />
     </mesh>
   )
 }
@@ -1147,7 +1193,7 @@ export default function Dashboard() {
                       <Canvas camera={{ position: [0, 0, 4.5] }}>
                         <ambientLight intensity={0.4} />
                         <pointLight position={[10, 10, 10]} />
-                        <WireframeMesh rotate={true} />
+                        <WireframeMesh rotate={true} projectId={activeProject?.id} />
                         <OrbitControls enableZoom={true} enablePan={false} />
                       </Canvas>
                     </Suspense>
