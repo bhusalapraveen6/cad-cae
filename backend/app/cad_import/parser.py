@@ -342,7 +342,177 @@ def _synthetic_geometry(suffix: str, element_size: float = 5.0, file_path: Optio
         except Exception as e:
             logger.error("Failed fallback step parsing", error=str(e), exc_info=True)
             raise ValueError(f"STEP parsing failed: {e}")
+    elif suffix in (".iges", ".igs"):
+        if not file_path or not file_path.exists():
+            raise ValueError(f"IGES file not found at path: {file_path}")
+        
+        try:
+            from scipy.spatial import ConvexHull
+            content = file_path.read_text(errors='ignore')
+            lines = content.splitlines()
+            p_lines = []
+            for line in lines:
+                # Standard IGES: column 73 is 'P'
+                if len(line) >= 73 and line[72] == 'P':
+                    p_lines.append(line[:64])
+            
+            p_content = "".join(p_lines)
+            entities = p_content.split(";")
+            
+            pts = []
+            
+            def parse_float(s):
+                s = s.strip().replace('D', 'e').replace('d', 'e')
+                return float(s)
+                
+            for ent in entities:
+                ent = ent.strip()
+                if not ent:
+                    continue
+                parts = [p.strip() for p in ent.split(",")]
+                if not parts or not parts[0]:
+                    continue
+                
+                try:
+                    etype = int(parts[0])
+                except ValueError:
+                    continue
+                    
+                if etype == 502:  # Vertex List
+                    try:
+                        num_vertices = int(parts[1])
+                        for i in range(num_vertices):
+                            idx = 2 + i * 3
+                            if idx + 2 < len(parts):
+                                pts.append([
+                                    parse_float(parts[idx]),
+                                    parse_float(parts[idx+1]),
+                                    parse_float(parts[idx+2])
+                                ])
+                    except Exception:
+                        pass
+                elif etype == 116:  # Point
+                    try:
+                        pts.append([
+                            parse_float(parts[1]),
+                            parse_float(parts[2]),
+                            parse_float(parts[3])
+                        ])
+                    except Exception:
+                        pass
+                elif etype == 110:  # Line
+                    try:
+                        pts.append([
+                            parse_float(parts[1]),
+                            parse_float(parts[2]),
+                            parse_float(parts[3])
+                        ])
+                        pts.append([
+                            parse_float(parts[4]),
+                            parse_float(parts[5]),
+                            parse_float(parts[6])
+                        ])
+                    except Exception:
+                        pass
+                elif etype == 106:  # Copious Data
+                    try:
+                        ip = int(parts[1])
+                        n = int(parts[2])
+                        if ip in (1, 3):
+                            stride = 6 if ip == 3 else 3
+                            for i in range(n):
+                                idx = 3 + i * stride
+                                if idx + 2 < len(parts):
+                                    pts.append([
+                                        parse_float(parts[idx]),
+                                        parse_float(parts[idx+1]),
+                                        parse_float(parts[idx+2])
+                                    ])
+                        elif ip == 2:
+                            zt = parse_float(parts[3])
+                            for i in range(n):
+                                idx = 4 + i * 2
+                                if idx + 1 < len(parts):
+                                    pts.append([
+                                        parse_float(parts[idx]),
+                                        parse_float(parts[idx+1]),
+                                        zt
+                                    ])
+                    except Exception:
+                        pass
+                        
+            # Fallback if no structured points found: extract any group of 3 consecutive floats in the parameter section
+            if len(pts) < 4:
+                all_tokens = []
+                for ent in entities:
+                    ent = ent.strip()
+                    if not ent:
+                        continue
+                    tokens = [t.strip().replace('D', 'e').replace('d', 'e') for t in ent.split(',')]
+                    for t in tokens:
+                        try:
+                            val = float(t)
+                            if not val.is_integer() or abs(val) > 10:
+                                all_tokens.append(val)
+                        except ValueError:
+                            pass
+                
+                for i in range(0, len(all_tokens) - 2, 3):
+                    pts.append([all_tokens[i], all_tokens[i+1], all_tokens[i+2]])
+            
+            if not pts:
+                raise ValueError("No coordinate points could be extracted from the IGES file.")
+                
+            vertices = np.array(pts, dtype=np.float32)
+            xmin, ymin, zmin = vertices.min(axis=0)
+            xmax, ymax, zmax = vertices.max(axis=0)
+            dx, dy, dz = float(xmax - xmin), float(ymax - ymin), float(zmax - zmin)
+            
+            dx = float(max(dx, 0.001))
+            dy = float(max(dy, 0.001))
+            dz = float(max(dz, 0.001))
+            
+            center_of_mass = (float((xmin + xmax) / 2), float((ymin + ymax) / 2), float((zmin + zmax) / 2))
+            
+            faces = []
+            if len(vertices) >= 4:
+                try:
+                    hull = ConvexHull(vertices)
+                    faces = hull.simplices.astype(np.int32)
+                    volume = float(hull.volume)
+                    surface_area = float(hull.area)
+                except Exception as ex:
+                    logger.warning("ConvexHull failed for fallback IGES points, using bounding box", error=str(ex))
+                    faces = np.zeros((0, 3), dtype=np.int32)
+                    volume = float(dx * dy * dz)
+                    surface_area = float(2 * (dx * dy + dy * dz + dz * dx))
+            else:
+                faces = np.zeros((0, 3), dtype=np.int32)
+                volume = float(dx * dy * dz)
+                surface_area = float(2 * (dx * dy + dy * dz + dz * dx))
+                
+            logger.info(
+                "Parsed IGES file coordinates using local ConvexHull fallback",
+                num_vertices=len(vertices),
+                num_faces=len(faces),
+                bbox=(dx, dy, dz)
+            )
+            
+            return GeometryData(
+                volume=volume,
+                surface_area=surface_area,
+                bbox=(dx, dy, dz),
+                center_of_mass=center_of_mass,
+                vertices=vertices,
+                faces=faces,
+                is_watertight=True,
+                num_components=1,
+                format=suffix.lstrip("."),
+            )
+        except Exception as e:
+            logger.error("Failed fallback iges parsing", error=str(e), exc_info=True)
+            raise ValueError(f"IGES parsing failed: {e}")
     else:
-        # Reject IGES (.iges / .igs) or other formats when real parsers fail
+        # Reject other formats when real parsers fail
         raise ValueError(f"{suffix.upper().lstrip('.')} parsing is not supported in local fallback mode (requires OpenCASCADE / pythonocc-core).")
 

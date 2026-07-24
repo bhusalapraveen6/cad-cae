@@ -99,16 +99,28 @@ async def test_cad_parsing_pipeline():
         # Check that bounding box sizes are different
         assert step_features["bounding_box"]["x"] != assembly_features["bounding_box"]["x"]
         
-        # 5. Upload invalid/unsupported file (should fail parsing gracefully)
-        # We can upload an IGES file because without pythonocc-core locally, it should fail parsing
+        # 5. Upload IGES file (should parse successfully via local fallback mode)
         iges_path = Path(__file__).parent / "test_edge.iges"
         with open(iges_path, "rb") as f:
             files = {"file": ("test_edge.iges", f.read(), "application/octet-stream")}
         upload_iges_res = await ac.post("/api/upload", files=files, headers=headers)
         assert upload_iges_res.status_code == 201, f"IGES Upload failed: {upload_iges_res.text}"
         iges_data = upload_iges_res.json()
-        assert iges_data["parsing_status"] == "failed"
-        assert iges_data["error_message"] is not None
-        assert "not supported in local fallback mode" in iges_data["error_message"]
-        assert iges_data["geometry_features"] is None
-        assert len(iges_data["suggestions"]) == 0
+        assert iges_data["parsing_status"] == "success", f"IGES parsing status is not success: {iges_data.get('error_message')}"
+        iges_features = iges_data["geometry_features"]
+        assert iges_features is not None
+        assert iges_features["volume"] > 0
+        assert len(iges_data["suggestions"]) > 0
+
+        # 6. Upload invalid/unsupported file (should fail parsing gracefully)
+        with open(stl_path, "rb") as f:
+            # Send file with unsupported extension .xyz
+            files = {"file": ("test_invalid.xyz", f.read(), "application/octet-stream")}
+        upload_invalid_res = await ac.post("/api/upload", files=files, headers=headers)
+        assert upload_invalid_res.status_code == 201, f"Invalid file upload failed: {upload_invalid_res.text}"
+        invalid_data = upload_invalid_res.json()
+        assert invalid_data["parsing_status"] == "failed"
+        assert invalid_data["error_message"] is not None
+        assert "Unsupported CAD format" in invalid_data["error_message"]
+        assert invalid_data["geometry_features"] is None
+        assert len(invalid_data["suggestions"]) == 0
