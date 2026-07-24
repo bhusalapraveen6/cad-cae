@@ -211,11 +211,11 @@ def _synthetic_geometry(suffix: str, element_size: float = 5.0, file_path: Optio
                 vertices = np.array(pts, dtype=np.float32)
                 xmin, ymin, zmin = vertices.min(axis=0)
                 xmax, ymax, zmax = vertices.max(axis=0)
-                dx, dy, dz = xmax - xmin, ymax - ymin, zmax - zmin
+                dx, dy, dz = float(xmax - xmin), float(ymax - ymin), float(zmax - zmin)
                 
-                dx = max(dx, 0.001)
-                dy = max(dy, 0.001)
-                dz = max(dz, 0.001)
+                dx = float(max(dx, 0.001))
+                dy = float(max(dy, 0.001))
+                dz = float(max(dz, 0.001))
                 
                 center_of_mass = (float((xmin + xmax) / 2), float((ymin + ymax) / 2), float((zmin + zmax) / 2))
                 

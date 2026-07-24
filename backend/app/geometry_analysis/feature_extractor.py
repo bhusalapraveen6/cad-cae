@@ -62,21 +62,21 @@ def extract_features(geom: GeometryData) -> GeometryFeatures:
     Works with trimesh-parsed data on Windows; more accurate with pythonocc.
     """
     bbox = geom.bbox
-    dx, dy, dz = bbox[0], bbox[1], bbox[2]
+    dx, dy, dz = float(bbox[0]), float(bbox[1]), float(bbox[2])
 
     dims_sorted = sorted([dx, dy, dz])
     min_dim = dims_sorted[0] if dims_sorted[0] > 0 else 1.0
     max_dim = dims_sorted[2] if dims_sorted[2] > 0 else 1.0
 
-    slenderness = max_dim / min_dim
+    slenderness = float(max_dim / min_dim)
 
-    volume = max(geom.volume, 1e-9)
-    sv_ratio = geom.surface_area / volume   # mm⁻¹
+    volume = float(max(geom.volume, 1e-9))
+    sv_ratio = float(geom.surface_area / volume)   # mm⁻¹
 
     # ── Thin-wall detection ────────────────────────────────────────────────────
-    thin_wall_ratio = dims_sorted[0] / dims_sorted[2] if dims_sorted[2] > 0 else 1.0
-    is_thin_walled = thin_wall_ratio < 0.15 or sv_ratio > SURFACE_VOLUME_THIN
-    is_sheet_metal  = thin_wall_ratio < 0.08  # very thin plate
+    thin_wall_ratio = float(dims_sorted[0] / dims_sorted[2] if dims_sorted[2] > 0 else 1.0)
+    is_thin_walled = bool(thin_wall_ratio < 0.15 or sv_ratio > SURFACE_VOLUME_THIN)
+    is_sheet_metal  = bool(thin_wall_ratio < 0.08)  # very thin plate
 
     # ── Hole / fillet detection ────────────────────────────────────────────────
     # Heuristic: use face normals variance — many small curved surfaces suggest holes/fillets
@@ -89,57 +89,57 @@ def extract_features(geom: GeometryData) -> GeometryFeatures:
         nz_var = float(np.var(geom.normals[:, 2]))
         normal_variance = nx_var + ny_var + nz_var
         # High variance → many curved surfaces → holes/fillets likely
-        has_holes = normal_variance > 0.3
-        has_fillets = normal_variance > 0.15
+        has_holes = bool(normal_variance > 0.3)
+        has_fillets = bool(normal_variance > 0.15)
 
     # ── Internal cavity detection ──────────────────────────────────────────────
     # Heuristic: if geometry is not watertight, or has multiple components, likely has cavities
-    has_internal_cavity = (
+    has_internal_cavity = bool(
         not geom.is_watertight or
         geom.num_components > 1 or
         _estimate_cavity_fraction(geom) > CAVITY_VOLUME_FRACTION
     )
 
     # ── Symmetry detection ─────────────────────────────────────────────────────
-    has_symmetry = _detect_symmetry(geom)
+    has_symmetry = bool(_detect_symmetry(geom))
 
     # ── Slender ───────────────────────────────────────────────────────────────
-    is_slender = slenderness > SLENDERNESS_HIGH
+    is_slender = bool(slenderness > SLENDERNESS_HIGH)
 
     from app.geometry_analysis.mesh_quality import compute_mesh_quality
     quality_data = compute_mesh_quality(geom.vertices, geom.faces)
 
     raw = {
-        "bbox_x_mm": dx,
-        "bbox_y_mm": dy,
-        "bbox_z_mm": dz,
-        "volume_mm3": round(geom.volume, 2),
-        "surface_area_mm2": round(geom.surface_area, 2),
-        "slenderness_ratio": round(slenderness, 2),
-        "surface_volume_ratio": round(sv_ratio, 4),
-        "thin_wall_ratio": round(thin_wall_ratio, 3),
-        "is_watertight": geom.is_watertight,
-        "num_components": geom.num_components,
+        "bbox_x_mm": float(dx),
+        "bbox_y_mm": float(dy),
+        "bbox_z_mm": float(dz),
+        "volume_mm3": round(float(geom.volume), 2),
+        "surface_area_mm2": round(float(geom.surface_area), 2),
+        "slenderness_ratio": round(float(slenderness), 2),
+        "surface_volume_ratio": round(float(sv_ratio), 4),
+        "thin_wall_ratio": round(float(thin_wall_ratio), 3),
+        "is_watertight": bool(geom.is_watertight),
+        "num_components": int(geom.num_components),
         "mesh_quality_metrics": quality_data,
     }
 
     features = GeometryFeatures(
-        volume=geom.volume,
-        surface_area=geom.surface_area,
-        bbox=geom.bbox,
-        center_of_mass=geom.center_of_mass,
-        slenderness_ratio=slenderness,
-        surface_volume_ratio=sv_ratio,
-        is_thin_walled=is_thin_walled,
-        has_holes=has_holes,
-        has_fillets=has_fillets,
-        has_internal_cavity=has_internal_cavity,
-        has_symmetry=has_symmetry,
-        is_sheet_metal=is_sheet_metal,
-        is_slender=is_slender,
-        element_count=len(geom.faces) if geom.faces is not None else 0,
-        node_count=len(geom.vertices) if geom.vertices is not None else 0,
-        mesh_quality=quality_data["overall_quality_score"],
+        volume=float(geom.volume),
+        surface_area=float(geom.surface_area),
+        bbox=(float(geom.bbox[0]), float(geom.bbox[1]), float(geom.bbox[2])),
+        center_of_mass=(float(geom.center_of_mass[0]), float(geom.center_of_mass[1]), float(geom.center_of_mass[2])),
+        slenderness_ratio=float(slenderness),
+        surface_volume_ratio=float(sv_ratio),
+        is_thin_walled=bool(is_thin_walled),
+        has_holes=bool(has_holes),
+        has_fillets=bool(has_fillets),
+        has_internal_cavity=bool(has_internal_cavity),
+        has_symmetry=bool(has_symmetry),
+        is_sheet_metal=bool(is_sheet_metal),
+        is_slender=bool(is_slender),
+        element_count=int(len(geom.faces)) if geom.faces is not None else 0,
+        node_count=int(len(geom.vertices)) if geom.vertices is not None else 0,
+        mesh_quality=float(quality_data["overall_quality_score"]) if quality_data["overall_quality_score"] is not None else None,
         raw=raw,
     )
 
@@ -165,9 +165,10 @@ def _estimate_cavity_fraction(geom: GeometryData) -> float:
     try:
         from scipy.spatial import ConvexHull
         hull = ConvexHull(geom.vertices)
-        convex_volume = hull.volume  # mm³
-        if convex_volume > 0 and geom.volume > 0:
-            return max(0.0, (convex_volume - geom.volume) / convex_volume)
+        convex_volume = float(hull.volume)  # mm³
+        actual_volume = float(geom.volume)
+        if convex_volume > 0 and actual_volume > 0:
+            return float(max(0.0, (convex_volume - actual_volume) / convex_volume))
     except Exception:
         pass
     return 0.0
@@ -180,10 +181,10 @@ def _detect_symmetry(geom: GeometryData) -> bool:
     """
     bbox = geom.bbox
     com = geom.center_of_mass
-    centroid = (bbox[0] / 2, bbox[1] / 2, bbox[2] / 2)
+    centroid = (float(bbox[0]) / 2, float(bbox[1]) / 2, float(bbox[2]) / 2)
 
     # Allow 10% offset
-    dx_frac = abs(com[0] - centroid[0]) / (bbox[0] + 1e-9)
-    dy_frac = abs(com[1] - centroid[1]) / (bbox[1] + 1e-9)
+    dx_frac = abs(float(com[0]) - centroid[0]) / (float(bbox[0]) + 1e-9)
+    dy_frac = abs(float(com[1]) - centroid[1]) / (float(bbox[1]) + 1e-9)
 
-    return dx_frac < 0.10 or dy_frac < 0.10
+    return bool(dx_frac < 0.10 or dy_frac < 0.10)
